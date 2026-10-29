@@ -1,0 +1,19 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# Generated content
+data/*.db
+data/*.db-*
+output/*
+logs/*
+!data/.gitkeep
+!output/.gitkeep
+!logs/.gitkeep
+
+# Licensed audio/fonts are added locally
+assets/music/*
+assets/sfx/*
+assets/fonts/*
+!assets/**/.gitkeep
