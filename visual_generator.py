@@ -84,6 +84,15 @@ FINISH_FILTERS = ",".join([
 ])
 
 
+# Transições de entrada (aplicadas no começo do clipe pelo editor, Módulo 4).
+TRANSITIONS = {
+    # Flash sutil: brilho sobe e volta ao normal em 0,12 s.
+    "flash": "eq=brightness='0.35*max(0,1-t/0.12)':eval=frame",
+    # Whip pan: borrão horizontal forte nos primeiros 0,14 s.
+    "whip": "gblur=sigma=45:sigmaV=0.01:enable='lt(t,0.14)'",
+}
+
+
 def build_image_prompt(scene_prompt: str, style_prefix: str | None = None) -> str:
     """Prefixo de estilo + descrição da cena + restrições."""
     prefix = style_prefix or os.getenv("VISUAL_STYLE_PREFIX") or DEFAULT_STYLE_PREFIX
@@ -108,7 +117,7 @@ class NoImageReturned(VisualGeneratorError):
 
 
 def motion_filter(motion: str, duration: float, fps: int = FPS,
-                  width: int = WIDTH, height: int = HEIGHT) -> str:
+                  width: int = WIDTH, height: int = HEIGHT, transition: str | None = None) -> str:
     """Filtro FFmpeg (-vf) que transforma uma imagem parada em clipe com movimento.
 
     A imagem é ampliada 2x antes do zoompan para o movimento não "tremer" por
@@ -116,6 +125,8 @@ def motion_filter(motion: str, duration: float, fps: int = FPS,
     """
     if motion not in MOTION_TYPES:
         raise ValueError(f"motion_type desconhecido: {motion!r}")
+    if transition is not None and transition not in TRANSITIONS:
+        raise ValueError(f"transição desconhecida: {transition!r}")
     n = max(1, round(duration * fps))
     big_w, big_h = width * 2, height * 2
     center_x = "iw/2-(iw/zoom/2)"
@@ -154,13 +165,19 @@ def motion_filter(motion: str, duration: float, fps: int = FPS,
         filters.append(
             "eq=brightness='0.05*sin(2*PI*t*1.1)':saturation='1.12+0.1*sin(2*PI*t*1.1)':eval=frame"
         )
+    if transition:
+        filters.append(TRANSITIONS[transition])
     filters.append(FINISH_FILTERS)
     return ",".join(filters)
 
 
 def render_clip(image: Path, motion: str, duration: float, output: Path,
-                ffmpeg: str = "ffmpeg") -> Path:
-    """Gera o clipe animado (H.264, sem áudio) de uma imagem."""
+                ffmpeg: str = "ffmpeg", transition: str | None = None) -> Path:
+    """Gera o clipe animado (H.264, sem áudio) de uma imagem.
+
+    duration é arredondada para frames inteiros (30 fps), o mesmo cálculo que o
+    editor usa para o áudio, para os dois baterem frame a frame.
+    """
     if shutil.which(ffmpeg) is None:
         raise VisualGeneratorError("FFmpeg não encontrado. Instale e confira com: ffmpeg -version")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -168,7 +185,7 @@ def render_clip(image: Path, motion: str, duration: float, output: Path,
     cmd = [
         ffmpeg, "-y", "-loglevel", "error",
         "-i", str(image),
-        "-vf", motion_filter(motion, duration),
+        "-vf", motion_filter(motion, duration, transition=transition),
         "-frames:v", str(frames),
         "-r", str(FPS),
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",

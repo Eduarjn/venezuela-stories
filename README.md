@@ -10,8 +10,8 @@ venezuela-stories/
 ├── database.py            # Parte 1 – histórico de temas (SQLite)
 ├── story_engine.py        # Parte 2 – roteiro + prompts de cena (JSON)
 ├── visual_generator.py    # Parte 3 – imagens (Gemini) + clipes animados
-├── voice_engine.py        # Parte 4 – narração + timestamps por palavra         [a fazer]
-├── video_editor.py        # Parte 5 – montagem final (FFmpeg/MoviePy)           [a fazer]
+├── voice_engine.py        # Parte 4 – narração + timestamps por palavra
+├── video_editor.py        # Parte 5 – montagem final (FFmpeg)
 ├── daily_scheduler.py     # Parte 6 – execução diária automática                [a fazer]
 ├── data/                  # stories.db (não vai para o Git)
 ├── output/AAAA-MM-DD/     # roteiro, imagens, áudio e vídeo final de cada dia
@@ -105,3 +105,50 @@ Para cada cena de `current_episode.json`:
 Rodar de novo não gera de novo o que já existe (economiza API). `visuals/manifest.json` lista
 as cenas; as durações são estimadas pelas palavras e o editor (Módulo 4) re-renderiza com a
 duração exata da narração.
+
+## Narração (`voice_engine.py`)
+
+```bash
+python voice_engine.py                 # episódio de hoje
+```
+
+| `TTS_PROVIDER` | Custo | Tempo de cada palavra |
+|---|---|---|
+| `edge` (padrão) | grátis | evento `WordBoundary` do edge-tts |
+| `elevenlabs` | pago | tempo por caractere da API, agrupado em palavras |
+| `openai` | pago | não vem da API: alinhamento local com faster-whisper (`pip install -r requirements-optional.txt`) |
+
+Depois do TTS, cada cena é "enxugada": no máximo 0,04 s antes da primeira palavra, 0,12 s
+depois da última e **nenhuma pausa interna maior que 0,25 s**. Os tempos das palavras são
+recalculados. Saída: `assets/episodes/{id}/audio/scene_XX.wav` e `audio/timeline.json`
+(duração medida com ffprobe). 1 tentativa + até 3 novas por cena.
+
+## Edição (`video_editor.py`)
+
+```bash
+python video_editor.py                 # gera output/AAAA-MM-DD/final_video.mp4
+```
+
+Coloque seus arquivos (com licença de uso):
+
+| Pasta | Arquivos |
+|---|---|
+| `assets/sfx/` | `whoosh.mp3`, `impact.mp3` (usado para `thunder`), `riser.mp3` (para `suspense_riser`), `click.mp3` (para `old_film_click`), `crowd.mp3` (para `crowd_murmur`). Também aceita o nome exato do `sfx_cue`. |
+| `assets/music/` | trilhas de suspense/históricas (`.mp3/.wav/.m4a`); cada episódio usa uma, alternando |
+| `assets/fonts/` | opcional: `.ttf/.otf` da fonte das legendas (defina `SUBTITLE_FONT` com o nome dela) |
+
+O que o editor faz:
+
+- **Sincronia:** cada cena dura exatamente a fala dela, arredondada para frames inteiros
+  (30 fps); vídeo e áudio terminam no mesmo frame.
+- **Transições:** corte seco no hook; depois, *whip pan* (borrão horizontal de 0,14 s) nas
+  cenas `whoosh` e flash sutil (0,12 s) nas outras, com o efeito sonoro 0,08 s antes do corte.
+- **Trilha com ducking:** música a −6 dB e **−18 dB a mais enquanto há fala**, voltando nas
+  pausas ≥ 0,6 s com rampas de 0,15 s. Mix final normalizado a −14 LUFS (padrão TikTok).
+- **Legendas:** 2–4 palavras por vez (nunca cruzam o fim de frase), até 2 linhas, caixa alta,
+  borda preta grossa, centralizadas a 61% da altura; palavra falada em amarelo, em vermelho se
+  tiver número; cada grupo entra com um "pop" de 90 ms.
+- **Memória:** só FFmpeg em fluxo (sem MoviePy). Cada cena é renderizada sozinha e as cenas são
+  concatenadas sem recodificar; uma passada final aplica legendas + mix. Num teste com 14 cenas
+  (37 s) o pico foi ~520 MB. Para limitar CPU/RAM, use `FFMPEG_THREADS=2`.
+- Marca o tema no banco como `rendered`.

@@ -1,0 +1,4 @@
+# Só para TTS_PROVIDER=openai (a OpenAI não devolve o tempo das palavras;
+# o faster-whisper alinha localmente, na CPU).
+openai>=1.0,<3
+faster-whisper>=1.0,<2
