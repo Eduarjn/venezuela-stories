@@ -1,9 +1,12 @@
 """Módulo 2 – Imagens (Gemini) e clipes animados (FFmpeg).
 
 Lê output/AAAA-MM-DD/current_episode.json e, para cada cena:
-1. gera a imagem no Gemini em 9:16 (até 3 tentativas com backoff);
-2. ajusta para 1080x1920 e salva em visuals/scene_XX.png;
-3. aplica o movimento (motion_type) via FFmpeg e salva visuals/scene_XX.mp4.
+1. monta o prompt com o prefixo fixo de estilo (mesmo "diretor de arte" em todas);
+2. gera a imagem no Gemini em 9:16 (1 tentativa + até 3 novas, com backoff e timeout);
+3. ajusta para 1080x1920 e salva em assets/episodes/{episode_id}/visuals/scene_XX.png;
+4. aplica o movimento (motion_type) via FFmpeg e salva visuals/scene_XX.mp4.
+
+episode_id é o topic_id do banco (gravado no JSON pelo story_engine).
 
 Imagens e clipes que já existem não são gerados de novo: se o processo cair no
 meio, rodar outra vez continua de onde parou sem gastar API.
@@ -38,8 +41,11 @@ log = logging.getLogger("visual_generator")
 PROJECT_DIR = Path(__file__).parent
 WIDTH, HEIGHT = 1080, 1920
 FPS = 30
-MAX_IMAGE_ATTEMPTS = 3
+# 1 tentativa + até 3 novas tentativas.
+MAX_IMAGE_ATTEMPTS = 4
 BACKOFF_SECONDS = (2, 4, 8)
+# Uma chamada travada conta como falha e entra no retry.
+API_TIMEOUT_SECONDS = 120
 # Erros de configuração: tentar de novo não resolve.
 NON_RETRYABLE_CODES = {400, 401, 403, 404}
 
@@ -48,6 +54,19 @@ MIN_CLIP_SECONDS = 2.5
 # Sobra no fim de cada clipe para o crossfade do editor.
 CLIP_TAIL_SECONDS = 0.5
 
+# Prefixo fixo: todas as cenas parecem do mesmo diretor de arte.
+# Pode ser trocado no .env (VISUAL_STYLE_PREFIX) sem mexer no código.
+DEFAULT_STYLE_PREFIX = (
+    "Cinematic historical illustration in the style of a prestige documentary. "
+    "Dramatic chiaroscuro lighting, rich painterly textures, muted earthy palette with "
+    "warm amber highlights and deep shadows, subtle film grain, 9:16 vertical composition."
+)
+# Âncora de estilo que o story_engine acrescenta; sai do prompt para não duplicar.
+STORY_ENGINE_STYLE_ANCHOR = (
+    "cinematic historical illustration, dramatic lighting, rich textures, "
+    "film grain, 9:16 vertical composition"
+)
+
 IMAGE_PROMPT_SUFFIX = (
     "No text, no letters, no captions, no watermark, no logos. "
     "No identifiable face of a real person."
@@ -55,8 +74,26 @@ IMAGE_PROMPT_SUFFIX = (
 
 MOTION_TYPES = ("zoom_in_fast", "pan_left_to_right", "shake_impact", "slow_ken_burns", "pulse_glow")
 
-# Acabamento comum: vinheta leve + granulação de filme.
-FINISH_FILTERS = "vignette=PI/5,noise=alls=7:allf=t+u,format=yuv420p"
+# Acabamento de documentário: vinheta que "respira", leve tremulação de brilho de
+# projetor antigo e granulação de filme que muda a cada frame.
+FINISH_FILTERS = ",".join([
+    "vignette=angle='PI/5+0.05*sin(2*PI*t/2.5)':eval=frame",
+    "eq=brightness='0.012*sin(2*PI*t*7)':eval=frame",
+    "noise=alls=7:allf=t+u",
+    "format=yuv420p",
+])
+
+
+def build_image_prompt(scene_prompt: str, style_prefix: str | None = None) -> str:
+    """Prefixo de estilo + descrição da cena + restrições."""
+    prefix = style_prefix or os.getenv("VISUAL_STYLE_PREFIX") or DEFAULT_STYLE_PREFIX
+    scene = scene_prompt.strip()
+    lowered = scene.lower()
+    anchor_at = lowered.find(STORY_ENGINE_STYLE_ANCHOR)
+    if anchor_at != -1:
+        scene = scene[:anchor_at] + scene[anchor_at + len(STORY_ENGINE_STYLE_ANCHOR):]
+    scene = scene.strip(" ,.")
+    return f"{prefix.strip()} Scene: {scene}. {IMAGE_PROMPT_SUFFIX}"
 
 
 class VisualGeneratorError(RuntimeError):
@@ -85,8 +122,9 @@ def motion_filter(motion: str, duration: float, fps: int = FPS,
     center_y = "ih/2-(ih/zoom/2)"
 
     if motion == "zoom_in_fast":
-        # Aproximação forte com desaceleração (ease-out).
-        z = f"1+0.35*(1-pow(1-on/{n},2))"
+        # Zoom rápido até 1.25x nos primeiros 0.5s, depois aproximação lenta até 1.33x.
+        fast = max(1, round(fps * 0.5))
+        z = f"if(lt(on,{fast}),1+0.25*on/{fast},1.25+0.08*(on-{fast})/{max(1, n - fast)})"
         x, y = center_x, center_y
     elif motion == "slow_ken_burns":
         z = f"1.04+0.08*on/{n}"
@@ -176,10 +214,14 @@ class GeminiImageClient:
         self.model = model
         if client is None:
             from google import genai
+            from google.genai import types
 
             if not os.getenv("GEMINI_API_KEY"):
                 raise VisualGeneratorError("Defina GEMINI_API_KEY no .env")
-            client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+            client = genai.Client(
+                api_key=os.environ["GEMINI_API_KEY"],
+                http_options=types.HttpOptions(timeout=API_TIMEOUT_SECONDS * 1000),
+            )
         self.client = client
 
     def generate(self, prompt: str) -> bytes:
@@ -230,6 +272,7 @@ class VisualGenerator:
         self,
         image_client: GeminiImageClient | None = None,
         output_dir: Path | None = None,
+        episodes_dir: Path | None = None,
         sleep: Callable[[float], None] = time.sleep,
         render: Callable[[Path, str, float, Path], Path] = render_clip,
     ) -> None:
@@ -243,12 +286,13 @@ class VisualGenerator:
             image_client = GeminiImageClient(model)
         self.image_client = image_client
         self.output_dir = output_dir or PROJECT_DIR / os.getenv("OUTPUT_DIR", "output")
+        self.episodes_dir = episodes_dir or PROJECT_DIR / "assets" / "episodes"
         self.sleep = sleep
         self.render = render
 
     def generate_image(self, prompt: str, path: Path) -> Path:
-        """Gera e salva a imagem, com até MAX_IMAGE_ATTEMPTS tentativas e backoff."""
-        full_prompt = f"{prompt.rstrip('. ')}. {IMAGE_PROMPT_SUFFIX}"
+        """Gera e salva a imagem: 1 tentativa + até 3 novas, com backoff de 2, 4 e 8 s."""
+        full_prompt = build_image_prompt(prompt)
         last_error: Exception | None = None
         for attempt in range(1, MAX_IMAGE_ATTEMPTS + 1):
             try:
@@ -280,7 +324,10 @@ class VisualGenerator:
                 f"{episode_path} não existe. Rode antes: python story_engine.py --date {day}"
             )
         episode = json.loads(episode_path.read_text(encoding="utf-8"))
-        visuals_dir = folder / "visuals"
+        episode_id = episode.get("topic_id")
+        if episode_id is None:
+            raise VisualGeneratorError(f"{episode_path} não tem topic_id (gere de novo com story_engine.py)")
+        visuals_dir = self.episodes_dir / str(episode_id) / "visuals"
         visuals_dir.mkdir(parents=True, exist_ok=True)
 
         results: list[SceneVisual] = []
@@ -305,8 +352,9 @@ class VisualGenerator:
 
         manifest = visuals_dir / "manifest.json"
         manifest.write_text(json.dumps({
-            "topic_id": episode.get("topic_id"),
+            "episode_id": episode_id,
             "date": day.isoformat(),
+            "episode_json": str(episode_path),
             "resolution": f"{WIDTH}x{HEIGHT}",
             "fps": FPS,
             "durations_are_estimates": True,

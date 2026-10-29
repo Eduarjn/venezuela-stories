@@ -85,14 +85,18 @@ python visual_generator.py --date 2026-11-05
 
 Para cada cena de `current_episode.json`:
 
-1. Gera a imagem no Gemini em 9:16 (até 3 tentativas, espera 2 s e 4 s entre elas; erro
-   400/401/403/404 para na hora porque é configuração).
-2. Corta/ajusta para 1080x1920 → `output/AAAA-MM-DD/visuals/scene_XX.png`.
-3. Anima com FFmpeg → `visuals/scene_XX.mp4` (30 fps, H.264, vinheta + granulação):
+1. Monta o prompt com o **prefixo fixo de estilo** (mesmo "diretor de arte" em todas as cenas;
+   troque em `VISUAL_STYLE_PREFIX` no `.env` se quiser outro visual).
+2. Gera a imagem no Gemini em 9:16: 1 tentativa + até 3 novas (espera 2, 4 e 8 s), timeout de
+   120 s por chamada; erro 400/401/403/404 para na hora porque é configuração.
+3. Ajusta para 1080x1920 → `assets/episodes/{episode_id}/visuals/scene_XX.png`
+   (`episode_id` = `topic_id` do banco).
+4. Anima com FFmpeg → `visuals/scene_XX.mp4` (30 fps, H.264), com vinheta que "respira",
+   tremulação leve de projetor antigo e granulação de filme:
 
 | motion_type | Efeito |
 |---|---|
-| `zoom_in_fast` | aproximação forte com desaceleração |
+| `zoom_in_fast` | zoom rápido até 1,25x nos primeiros 0,5 s, depois aproximação lenta |
 | `pan_left_to_right` | câmera desliza da esquerda para a direita |
 | `shake_impact` | tremor forte no primeiro meio segundo |
 | `slow_ken_burns` | zoom lento com leve deriva |

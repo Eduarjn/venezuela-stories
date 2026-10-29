@@ -12,6 +12,9 @@ logs/*
 !output/.gitkeep
 !logs/.gitkeep
 
+# Imagens/clipes gerados por episódio
+assets/episodes/
+
 # Licensed audio/fonts are added locally
 assets/music/*
 assets/sfx/*

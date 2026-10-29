@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from visual_generator import (  # noqa: E402
     BACKOFF_SECONDS,
+    DEFAULT_STYLE_PREFIX,
     HEIGHT,
     IMAGE_PROMPT_SUFFIX,
     MOTION_TYPES,
@@ -23,6 +24,7 @@ from visual_generator import (  # noqa: E402
     NoImageReturned,
     VisualGenerator,
     VisualGeneratorError,
+    build_image_prompt,
     estimate_duration,
     fit_vertical,
     motion_filter,
@@ -68,13 +70,14 @@ class VisualGeneratorTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.out = Path(self.tmp.name) / "output"
+        self.episodes = Path(self.tmp.name) / "assets" / "episodes"
         self.waits = []
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def generator(self, client, render=fake_render):
-        return VisualGenerator(image_client=client, output_dir=self.out,
+        return VisualGenerator(image_client=client, output_dir=self.out, episodes_dir=self.episodes,
                                sleep=self.waits.append, render=render)
 
     def write_episode(self, n_scenes=3):
@@ -93,10 +96,26 @@ class VisualGeneratorTest(unittest.TestCase):
         img = fit_vertical(png_bytes(size=(1024, 1024)))
         self.assertEqual(img.size, (WIDTH, HEIGHT))
 
-    def test_prompt_gets_safety_suffix(self):
+    def test_prompt_gets_style_prefix_and_safety_suffix(self):
         client = FakeImageClient(png_bytes())
         self.generator(client).generate_image("A lake.", self.out / "a.png")
+        self.assertTrue(client.prompts[0].startswith(DEFAULT_STYLE_PREFIX))
+        self.assertIn("Scene: A lake.", client.prompts[0])
         self.assertTrue(client.prompts[0].endswith(IMAGE_PROMPT_SUFFIX))
+
+    def test_story_engine_style_anchor_is_not_duplicated(self):
+        prompt = build_image_prompt(
+            "Fishermen at dusk, cinematic historical illustration, dramatic lighting, "
+            "rich textures, film grain, 9:16 vertical composition")
+        self.assertEqual(prompt.lower().count("film grain"), 1)
+        self.assertIn("Scene: Fishermen at dusk.", prompt)
+
+    def test_style_prefix_can_come_from_env(self):
+        import os
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"VISUAL_STYLE_PREFIX": "Oil painting."}):
+            self.assertTrue(build_image_prompt("A lake").startswith("Oil painting. Scene: A lake."))
 
     def test_retries_with_backoff_then_succeeds(self):
         client = FakeImageClient(ApiError(503), NoImageReturned("vazio"), png_bytes())
@@ -104,11 +123,12 @@ class VisualGeneratorTest(unittest.TestCase):
         self.assertTrue(path.exists())
         self.assertEqual(self.waits, [BACKOFF_SECONDS[0], BACKOFF_SECONDS[1]])
 
-    def test_gives_up_after_three_attempts(self):
-        client = FakeImageClient(ApiError(500), ApiError(500), ApiError(500))
+    def test_gives_up_after_one_try_plus_three_retries(self):
+        client = FakeImageClient(*[TimeoutError("lento")] * 4)
         with self.assertRaises(VisualGeneratorError):
             self.generator(client).generate_image("A lake", self.out / "a.png")
-        self.assertEqual(len(client.prompts), 3)
+        self.assertEqual(len(client.prompts), 4)
+        self.assertEqual(self.waits, list(BACKOFF_SECONDS))
 
     def test_configuration_error_fails_fast(self):
         client = FakeImageClient(ApiError(404))
@@ -120,15 +140,16 @@ class VisualGeneratorTest(unittest.TestCase):
     # -- episódio ------------------------------------------------------------
 
     def test_episode_creates_images_clips_and_manifest(self):
-        folder = self.write_episode(3)
+        self.write_episode(3)
         manifest = self.generator(FakeImageClient()).process_episode(DAY)
 
-        visuals = folder / "visuals"
+        visuals = self.episodes / "7" / "visuals"
+        self.assertEqual(manifest, visuals / "manifest.json")
         self.assertEqual(sorted(p.name for p in visuals.glob("scene_*.png")),
                          ["scene_01.png", "scene_02.png", "scene_03.png"])
         self.assertEqual(len(list(visuals.glob("scene_*.mp4"))), 3)
         data = json.loads(manifest.read_text(encoding="utf-8"))
-        self.assertEqual(data["topic_id"], 7)
+        self.assertEqual(data["episode_id"], 7)
         self.assertTrue(data["durations_are_estimates"])
         self.assertEqual([s["scene_id"] for s in data["scenes"]], [1, 2, 3])
 
@@ -164,6 +185,22 @@ class VisualGeneratorTest(unittest.TestCase):
             self.assertIn("d=120", vf)  # 4s * 30fps
             self.assertIn("s=1080x1920", vf)
         self.assertIn("eq=brightness", motion_filter("pulse_glow", 4.0))
+
+    def test_zoom_in_fast_is_fast_for_half_a_second_then_slow(self):
+        vf = motion_filter("zoom_in_fast", 4.0)
+        self.assertIn("if(lt(on,15),1+0.25*on/15,1.25+0.08*(on-15)/105)", vf)
+
+    def test_finish_has_dynamic_vignette_and_grain(self):
+        vf = motion_filter("pan_left_to_right", 2.0)
+        self.assertIn("vignette=angle='PI/5+0.05*sin(2*PI*t/2.5)':eval=frame", vf)
+        self.assertIn("noise=alls=7:allf=t+u", vf)
+
+    def test_episode_without_topic_id_is_rejected(self):
+        folder = self.out / DAY.isoformat()
+        folder.mkdir(parents=True)
+        (folder / "current_episode.json").write_text('{"scenes": []}', encoding="utf-8")
+        with self.assertRaisesRegex(VisualGeneratorError, "topic_id"):
+            self.generator(FakeImageClient()).process_episode(DAY)
 
     def test_unknown_motion_is_rejected(self):
         with self.assertRaises(ValueError):
