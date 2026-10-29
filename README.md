@@ -9,7 +9,7 @@ fatos históricos da Venezuela (TikTok, Reels, YouTube Shorts).
 venezuela-stories/
 ├── database.py            # Parte 1 – histórico de temas (SQLite)
 ├── story_engine.py        # Parte 2 – roteiro + prompts de cena (JSON)
-├── visual_generator.py    # Parte 3 – imagens (Gemini) + clipes animados        [a fazer]
+├── visual_generator.py    # Parte 3 – imagens (Gemini) + clipes animados
 ├── voice_engine.py        # Parte 4 – narração + timestamps por palavra         [a fazer]
 ├── video_editor.py        # Parte 5 – montagem final (FFmpeg/MoviePy)           [a fazer]
 ├── daily_scheduler.py     # Parte 6 – execução diária automática                [a fazer]
@@ -70,7 +70,34 @@ Antes de salvar, o episódio passa por:
 | 12–22 cenas de 3–16 palavras (3–5 s), duração total 35–90 s | idem |
 | Pergunta lançada nas cenas 1–3 e respondida nos últimos 40% | idem |
 | Tema inédito no banco | o modelo escolhe outro tema |
-| Trilha `fact`: cada fonte é aberta e o trecho citado precisa estar na página; 2+ domínios | o modelo pesquisa de novo ou retira o dado |
+| Trilha `fact`: 2+ domínios, e pelo menos 1 fonte com o trecho conferido (na página ou na citação da busca). Página que bloqueia o robô (403, Cloudflare, JS) vale se a busca da Anthropic retornou a URL; página que abre sem o trecho é reprovada | o modelo pesquisa de novo ou retira o dado |
 | Trilha `fiction`: rótulo de lenda/ficção nas 4 primeiras cenas | o modelo corrige |
 
 Só depois disso o tema é gravado no banco como `verified`.
+
+## Gerar imagens e clipes (`visual_generator.py`)
+
+```bash
+python visual_generator.py --list-models     # modelos de imagem da sua conta -> GEMINI_IMAGE_MODEL
+python visual_generator.py                   # episódio de hoje
+python visual_generator.py --date 2026-11-05
+```
+
+Para cada cena de `current_episode.json`:
+
+1. Gera a imagem no Gemini em 9:16 (até 3 tentativas, espera 2 s e 4 s entre elas; erro
+   400/401/403/404 para na hora porque é configuração).
+2. Corta/ajusta para 1080x1920 → `output/AAAA-MM-DD/visuals/scene_XX.png`.
+3. Anima com FFmpeg → `visuals/scene_XX.mp4` (30 fps, H.264, vinheta + granulação):
+
+| motion_type | Efeito |
+|---|---|
+| `zoom_in_fast` | aproximação forte com desaceleração |
+| `pan_left_to_right` | câmera desliza da esquerda para a direita |
+| `shake_impact` | tremor forte no primeiro meio segundo |
+| `slow_ken_burns` | zoom lento com leve deriva |
+| `pulse_glow` | zoom lento + brilho/saturação pulsando |
+
+Rodar de novo não gera de novo o que já existe (economiza API). `visuals/manifest.json` lista
+as cenas; as durações são estimadas pelas palavras e o editor (Módulo 4) re-renderiza com a
+duração exata da narração.
