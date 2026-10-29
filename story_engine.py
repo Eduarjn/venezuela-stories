@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Callable, Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
@@ -309,15 +310,33 @@ Formato exato do JSON:
 
 # --------------------------------------------------------------------------- verificação
 
+# Respostas que significam "o site barrou o robô", não "a fonte é falsa".
+BLOCKED_STATUS = {401, 403, 429, 451, 503}
+# Abaixo disso a página provavelmente é montada por JavaScript (texto não vem no HTML).
+MIN_PAGE_CHARS = 400
+
+
+class FetchBlocked(Exception):
+    """O site impediu a leitura (403, Cloudflare, timeout, conteúdo via JavaScript)."""
+
 
 def _page_text(raw_html: str) -> str:
-    raw_html = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", raw_html)
-    text = html.unescape(re.sub(r"(?s)<[^>]+>", " ", raw_html))
+    """Texto visível da página, sem tags, sem acento, só palavras separadas por espaço."""
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(raw_html, "html.parser")
+        for tag in soup(["script", "style", "noscript", "template"]):
+            tag.decompose()
+        text = soup.get_text(" ")
+    except ImportError:
+        cleaned = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", raw_html)
+        text = html.unescape(re.sub(r"(?s)<[^>]+>", " ", cleaned))
     return normalize(text).replace("-", " ")
 
 
 def quote_found(quote: str, page_text: str, min_token_ratio: float = 0.8) -> bool:
-    """O trecho aparece na página? Aceita pequenas diferenças de pontuação/formatação."""
+    """O trecho aparece no texto? Aceita diferenças de pontuação, acento e formatação."""
     q = normalize(quote).replace("-", " ")
     if not q:
         return False
@@ -330,21 +349,69 @@ def quote_found(quote: str, page_text: str, min_token_ratio: float = 0.8) -> boo
     return sum(t in page_tokens for t in tokens) / len(tokens) >= min_token_ratio
 
 
+def canonical_url(url: str) -> str:
+    """Mesma página com ou sem www, barra final, âncora ou parâmetros de rastreio."""
+    parsed = urlparse(url.strip())
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    query = "&".join(p for p in parsed.query.split("&") if p and not p.startswith("utm_"))
+    path = parsed.path.rstrip("/")
+    return f"{host}{path}" + (f"?{query}" if query else "")
+
+
+@dataclass
+class SearchEvidence:
+    """O que a ferramenta web_search da Anthropic devolveu nesta geração."""
+
+    result_urls: set[str] = field(default_factory=set)
+    citations: dict[str, list[str]] = field(default_factory=dict)  # url canônica -> cited_text
+
+    def add_response(self, content: list) -> None:
+        for block in content:
+            kind = getattr(block, "type", "")
+            if kind == "web_search_tool_result" and isinstance(block.content, list):
+                for result in block.content:
+                    if getattr(result, "url", None):
+                        self.result_urls.add(canonical_url(result.url))
+            elif kind == "text":
+                for citation in getattr(block, "citations", None) or []:
+                    if getattr(citation, "type", "") == "web_search_result_location":
+                        key = canonical_url(citation.url)
+                        self.citations.setdefault(key, []).append(citation.cited_text)
+                        self.result_urls.add(key)
+
+    def cited(self, url: str, quote: str) -> bool:
+        texts = self.citations.get(canonical_url(url), [])
+        return any(quote_found(quote, normalize(t).replace("-", " ")) for t in texts)
+
+    def was_returned(self, url: str) -> bool:
+        return canonical_url(url) in self.result_urls
+
+
 def fetch_url(url: str, timeout: float = 20) -> str:
     import requests
 
-    response = requests.get(
-        url,
-        timeout=timeout,
-        headers={"User-Agent": "Mozilla/5.0 (venezuela-stories fact-check)"},
-    )
-    response.raise_for_status()
+    try:
+        response = requests.get(
+            url,
+            timeout=timeout,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+                "Accept-Language": "es,pt-BR;q=0.9,en;q=0.8",
+            },
+        )
+    except (requests.Timeout, requests.ConnectionError) as exc:
+        raise FetchBlocked(exc.__class__.__name__) from exc
+    if response.status_code in BLOCKED_STATUS:
+        raise FetchBlocked(f"HTTP {response.status_code}")
+    response.raise_for_status()  # 404/410 etc.: link quebrado, a fonte não serve
     return response.text
 
 
 @dataclass
 class VerificationResult:
     verified: list[Source] = field(default_factory=list)
+    methods: dict[str, str] = field(default_factory=dict)  # url -> page|citation|search_result
     problems: list[str] = field(default_factory=list)
 
     @property
@@ -353,19 +420,53 @@ class VerificationResult:
 
     @property
     def ok(self) -> bool:
-        return len(self.domains) >= 2
+        # 2+ domínios, e pelo menos uma fonte com o trecho conferido de verdade
+        # (na página ou na citação da busca), não só "a busca achou a URL".
+        strong = any(m in ("page", "citation") for m in self.methods.values())
+        return len(self.domains) >= 2 and strong
 
 
-def verify_sources(sources: list[Source], fetcher: Callable[[str], str] = fetch_url) -> VerificationResult:
+def verify_sources(
+    sources: list[Source],
+    fetcher: Callable[[str], str] = fetch_url,
+    evidence: SearchEvidence | None = None,
+) -> VerificationResult:
+    """Confere cada fonte, do método mais forte ao mais fraco:
+
+    1. citation: o trecho bate com o cited_text que a busca da Anthropic devolveu.
+    2. page: a página abriu e o trecho está no texto visível.
+    3. search_result: a página bloqueou o robô, mas a busca da Anthropic retornou
+       essa URL. Só vale quando o acesso é BLOQUEADO; se a página abriu e o trecho
+       não está lá, a fonte é reprovada (sinal de citação inventada).
+    """
+    evidence = evidence or SearchEvidence()
     result = VerificationResult()
+
+    def accept(source: Source, method: str) -> None:
+        result.verified.append(source)
+        result.methods[source.url] = method
+
     for source in sources:
+        if evidence.cited(source.url, source.supporting_quote):
+            accept(source, "citation")
+            continue
         try:
             page = _page_text(fetcher(source.url))
-        except Exception as exc:  # rede, 404, timeout...
+            if len(page) < MIN_PAGE_CHARS:
+                raise FetchBlocked("página sem texto no HTML (provável JavaScript)")
+        except FetchBlocked as exc:
+            if evidence.was_returned(source.url):
+                accept(source, "search_result")
+            else:
+                result.problems.append(
+                    f"{source.url}: bloqueou a leitura ({exc}) e não veio da busca web_search"
+                )
+            continue
+        except Exception as exc:  # 404, URL quebrada...
             result.problems.append(f"{source.url}: não abriu ({exc.__class__.__name__})")
             continue
         if quote_found(source.supporting_quote, page):
-            result.verified.append(source)
+            accept(source, "page")
         else:
             result.problems.append(f"{source.url}: o trecho citado não aparece na página")
     return result
@@ -414,11 +515,12 @@ class StoryEngine:
 
     # -- chamada ao modelo --------------------------------------------------
 
-    def _ask(self, messages: list[dict]) -> str:
+    def _ask(self, messages: list[dict], evidence: SearchEvidence) -> str:
         """Chama o modelo com web_search e devolve o texto final.
 
-        Buscas longas podem pausar (stop_reason == "pause_turn"); nesse caso a
-        conversa continua de onde parou.
+        Os resultados e citações da busca vão para `evidence`, usados depois na
+        verificação das fontes. Buscas longas podem pausar (stop_reason ==
+        "pause_turn"); nesse caso a conversa continua de onde parou.
         """
         messages = list(messages)
         for _ in range(MAX_PAUSE_CONTINUATIONS + 1):
@@ -430,6 +532,7 @@ class StoryEngine:
                 tools=[{"type": "web_search_20250305", "name": "web_search",
                         "max_uses": WEB_SEARCH_MAX_USES}],
             )
+            evidence.add_response(response.content)
             if response.stop_reason == "pause_turn":
                 messages.append({"role": "assistant", "content": response.content})
                 continue
@@ -451,6 +554,8 @@ class StoryEngine:
             raise DaySlotTakenError(f"{day} já tem o tema #{existing.id} '{existing.title}'")
 
         excluded: list[str] = []
+        # As buscas de tentativas anteriores continuam valendo como evidência.
+        evidence = SearchEvidence()
         messages = [{"role": "user",
                      "content": build_user_prompt(language, self.db.used_topics_summary(), excluded)}]
 
@@ -458,15 +563,16 @@ class StoryEngine:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             log.info("Tentativa %s/%s", attempt, MAX_ATTEMPTS)
             try:
-                raw = self._ask(messages)
+                raw = self._ask(messages, evidence)
             except ValueError as exc:  # resposta cortada
                 last_error = str(exc)
                 messages = messages[:1]
                 continue
 
-            feedback = self._check(raw, language, excluded)
-            if isinstance(feedback, Episode):
-                return self._save(feedback, day)
+            feedback = self._check(raw, language, excluded, evidence)
+            if not isinstance(feedback, str):
+                episode, methods = feedback
+                return self._save(episode, day, methods)
 
             last_error = feedback
             log.warning("Tentativa %s rejeitada: %s", attempt, feedback)
@@ -479,8 +585,10 @@ class StoryEngine:
             ]
         raise StoryEngineError(f"não foi possível gerar um episódio válido: {last_error}")
 
-    def _check(self, raw: str, language: str, excluded: list[str]) -> Episode | str:
-        """Devolve o Episode aprovado ou a mensagem de erro para o modelo corrigir."""
+    def _check(
+        self, raw: str, language: str, excluded: list[str], evidence: SearchEvidence
+    ) -> tuple[Episode, dict[str, str]] | str:
+        """Devolve (episódio aprovado, método de verificação por URL) ou o erro para o modelo corrigir."""
         try:
             data = extract_json(raw)
         except (ValueError, json.JSONDecodeError) as exc:
@@ -499,27 +607,32 @@ class StoryEngine:
             return (f"O tema '{episode.topic_title}' repete #{duplicate.id} '{duplicate.title}'. "
                     "Escolha OUTRO tema inédito e escreva o episódio inteiro de novo.")
 
-        if episode.track == "fact":
-            check = verify_sources(episode.sources, self.fetcher)
-            if not check.ok:
-                problems = "\n".join(f"- {p}" for p in check.problems)
-                return ("A verificação automática das fontes falhou (são necessárias 2+ fontes de "
-                        f"domínios diferentes com o trecho citado literalmente):\n{problems}\n"
-                        "Pesquise de novo, troque as fontes ou retire os dados que não se confirmam.")
-            unverified = {s.url for s in episode.sources} - {s.url for s in check.verified}
-            for claim in episode.claims:
-                if not set(claim.source_urls) - unverified:
-                    return (f"A afirmação '{claim.claim}' só cita fontes que não foram confirmadas. "
-                            "Apoie-a em uma fonte confirmada ou retire do roteiro.")
-            episode.sources = check.verified
-        return episode
+        if episode.track != "fact":
+            return episode, {}
 
-    def _save(self, episode: Episode, day: date) -> Path:
+        check = verify_sources(episode.sources, self.fetcher, evidence)
+        if not check.ok:
+            problems = "\n".join(f"- {p}" for p in check.problems) or "- nenhum problema de acesso"
+            return ("A verificação automática das fontes falhou. É preciso 2+ fontes de domínios "
+                    "diferentes, e pelo menos uma com o trecho citado conferido na página ou na "
+                    f"citação da busca:\n{problems}\n"
+                    "Pesquise de novo, troque as fontes ou retire os dados que não se confirmam.")
+        unverified = {s.url for s in episode.sources} - {s.url for s in check.verified}
+        for claim in episode.claims:
+            if not set(claim.source_urls) - unverified:
+                return (f"A afirmação '{claim.claim}' só cita fontes que não foram confirmadas. "
+                        "Apoie-a em uma fonte confirmada ou retire do roteiro.")
+        episode.sources = check.verified
+        for url, method in check.methods.items():
+            log.info("Fonte confirmada (%s): %s", method, url)
+        return episode, check.methods
+
+    def _save(self, episode: Episode, day: date, methods: dict[str, str]) -> Path:
         topic = self.db.reserve_topic(
             episode.topic_title, episode.entity, episode.category, episode.track, day
         )
         for source in episode.sources:
-            self.db.add_source(topic.id, source.url, source.title)
+            self.db.add_source(topic.id, source.url, source.title, methods.get(source.url))
         self.db.set_status(topic.id, "scripted")
         self.db.set_status(topic.id, "verified")
 
@@ -531,6 +644,7 @@ class StoryEngine:
             "date": day.isoformat(),
             "estimated_seconds": round(episode.estimated_seconds, 1),
             **episode.model_dump(),
+            "source_verification": methods,
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         log.info("Episódio #%s salvo em %s (%.0fs, %s cenas)",

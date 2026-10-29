@@ -13,10 +13,15 @@ from database import StoryDatabase  # noqa: E402
 from story_engine import (  # noqa: E402
     STYLE_ANCHOR,
     Episode,
+    FetchBlocked,
+    SearchEvidence,
+    Source,
     StoryEngine,
     StoryEngineError,
+    canonical_url,
     extract_json,
     quote_found,
+    verify_sources,
 )
 
 DAY = date(2026, 11, 1)
@@ -24,9 +29,12 @@ SRC_A = "https://pt.wikipedia.org/wiki/Relampago_do_Catatumbo"
 SRC_B = "https://www.example-geografia.com/catatumbo"
 QUOTE_A = "O fenômeno ocorre sobre a foz do rio Catatumbo"
 QUOTE_B = "tempestades elétricas frequentes sobre o lago"
+FILLER = "<p>" + "Texto de contexto sobre a geografia e a história da região. " * 10 + "</p>"
 PAGES = {
-    SRC_A: f"<html><body><p>Texto. {QUOTE_A}, no Lago de Maracaibo.</p></body></html>",
-    SRC_B: f"<html><script>x()</script><div>Há {QUOTE_B} durante muitas noites.</div></html>",
+    # Tags no meio da frase não podem atrapalhar a verificação.
+    SRC_A: f"<html><body>{FILLER}<p>O fenômeno ocorre sobre a foz do rio <a href='#'>Catatumbo</a>, "
+           f"no Lago de <b>Maracaibo</b>.</p></body></html>",
+    SRC_B: f"<html><script>x()</script>{FILLER}<div>Há {QUOTE_B} durante muitas noites.</div></html>",
 }
 
 NARRATION = [
@@ -81,8 +89,18 @@ def episode_data(**overrides):
     return data
 
 
-def response(text, stop_reason="end_turn"):
-    return SimpleNamespace(stop_reason=stop_reason, content=[SimpleNamespace(type="text", text=text)])
+def response(text, stop_reason="end_turn", search_urls=(), citations=()):
+    """Resposta falsa da API. citations = [(url, cited_text), ...]"""
+    content = []
+    if search_urls:
+        content.append(SimpleNamespace(
+            type="web_search_tool_result",
+            content=[SimpleNamespace(type="web_search_result", url=u, title="t") for u in search_urls],
+        ))
+    cites = [SimpleNamespace(type="web_search_result_location", url=u, cited_text=t)
+             for u, t in citations]
+    content.append(SimpleNamespace(type="text", text=text, citations=cites or None))
+    return SimpleNamespace(stop_reason=stop_reason, content=content)
 
 
 class FakeClient:
@@ -96,10 +114,22 @@ class FakeClient:
         return self.replies.pop(0)
 
 
+BLOCKED = "https://www.cloudflare-protected.com/historia"
+JS_ONLY = "https://www.js-only-site.com/historia"
+
+
 def fake_fetch(url):
+    if url == BLOCKED:
+        raise FetchBlocked("HTTP 403")
+    if url == JS_ONLY:
+        return "<html><body><div id='root'></div><script>render()</script></body></html>"
     if url not in PAGES:
         raise ConnectionError(url)
     return PAGES[url]
+
+
+def no_fetch(url):
+    raise AssertionError(f"não deveria abrir {url}")
 
 
 class StoryEngineTest(unittest.TestCase):
@@ -212,6 +242,24 @@ class StoryEngineTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.engine().create_episode(DAY)
 
+    def test_blocked_site_found_by_search_is_accepted(self):
+        data = episode_data()
+        data["sources"][1] = {"url": BLOCKED, "title": "Bloqueado", "supporting_quote": QUOTE_B}
+        data["claims"][0]["source_urls"] = [SRC_A, BLOCKED]
+        engine = self.engine(response(json.dumps(data), search_urls=[BLOCKED + "/", SRC_A]))
+        saved = json.loads(engine.create_episode(DAY).read_text(encoding="utf-8"))
+        self.assertEqual(saved["source_verification"], {SRC_A: "page", BLOCKED: "search_result"})
+        methods = {s["url"]: s["verification"] for s in self.db.sources(saved["topic_id"])}
+        self.assertEqual(methods[BLOCKED], "search_result")
+
+    def test_blocked_site_not_from_search_is_rejected(self):
+        data = episode_data()
+        data["sources"][1] = {"url": BLOCKED, "title": "Bloqueado", "supporting_quote": QUOTE_B}
+        data["claims"][0]["source_urls"] = [SRC_A, BLOCKED]
+        engine = self.engine(response(json.dumps(data)), response(json.dumps(episode_data())))
+        engine.create_episode(DAY)
+        self.assertIn("bloqueou a leitura", self.last_feedback())
+
     # -- trilha ficção -------------------------------------------------------
 
     def test_fiction_must_be_labelled(self):
@@ -232,6 +280,49 @@ class StoryEngineTest(unittest.TestCase):
         page = "o fenomeno ocorre sobre a foz do rio catatumbo no lago"
         self.assertTrue(quote_found("O fenômeno ocorre, sobre a foz do rio Catatumbo", page))
         self.assertFalse(quote_found("algo completamente diferente que nao esta aqui", page))
+
+
+class VerifySourcesTest(unittest.TestCase):
+    def src(self, url, quote=QUOTE_A):
+        return Source(url=url, title="t", supporting_quote=quote)
+
+    def test_citation_from_search_is_enough_without_opening_the_page(self):
+        evidence = SearchEvidence()
+        evidence.add_response(response("x", citations=[
+            (SRC_A, "Texto... " + QUOTE_A + " ..."), (SRC_B, QUOTE_B)]).content)
+        result = verify_sources([self.src(SRC_A), self.src(SRC_B, QUOTE_B)], no_fetch, evidence)
+        self.assertTrue(result.ok)
+        self.assertEqual(set(result.methods.values()), {"citation"})
+
+    def test_page_that_opens_without_the_quote_is_rejected_even_if_search_found_it(self):
+        evidence = SearchEvidence()
+        evidence.add_response(response("x", search_urls=[SRC_B]).content)
+        result = verify_sources([self.src(SRC_B, "frase inventada que nunca esteve nesta página")],
+                                fake_fetch, evidence)
+        self.assertEqual(result.verified, [])
+        self.assertIn("não aparece na página", result.problems[0])
+
+    def test_javascript_only_page_counts_as_blocked(self):
+        evidence = SearchEvidence()
+        evidence.add_response(response("x", search_urls=[JS_ONLY]).content)
+        result = verify_sources([self.src(JS_ONLY)], fake_fetch, evidence)
+        self.assertEqual(result.methods, {JS_ONLY: "search_result"})
+
+    def test_two_weak_sources_are_not_enough(self):
+        other = "https://outro-bloqueado.org/x"
+
+        def all_blocked(url):
+            raise FetchBlocked("HTTP 403")
+
+        evidence = SearchEvidence()
+        evidence.add_response(response("x", search_urls=[BLOCKED, other]).content)
+        result = verify_sources([self.src(BLOCKED), self.src(other)], all_blocked, evidence)
+        self.assertEqual(len(result.domains), 2)
+        self.assertFalse(result.ok)
+
+    def test_canonical_url_ignores_www_slash_anchor_and_utm(self):
+        self.assertEqual(canonical_url("https://www.site.com/a/?utm_source=x#topo"),
+                         canonical_url("http://site.com/a"))
 
 
 if __name__ == "__main__":

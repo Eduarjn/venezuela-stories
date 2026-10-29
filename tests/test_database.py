@@ -139,6 +139,26 @@ class StoryDatabaseTest(unittest.TestCase):
             "francisco-de-miranda: Francisco de Miranda no Arco do Triunfo"
         ])
 
+    def test_source_stores_how_it_was_verified(self):
+        topic = self.reserve_miranda()
+        self.db.add_source(topic.id, "https://www.britannica.com/x", "Britannica", "citation")
+        self.assertEqual(self.db.sources(topic.id)[0]["verification"], "citation")
+
+    def test_old_database_gets_verification_column(self):
+        import sqlite3
+
+        path = Path(self.tmp.name) / "old.db"
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE sources (id INTEGER PRIMARY KEY, topic_id INTEGER, url TEXT, "
+                     "domain TEXT, title TEXT, added_at TEXT)")
+        conn.commit()
+        conn.close()
+        StoryDatabase(path)
+        conn = sqlite3.connect(path)
+        columns = [r[1] for r in conn.execute("PRAGMA table_info(sources)")]
+        conn.close()
+        self.assertIn("verification", columns)
+
 
 if __name__ == "__main__":
     unittest.main()

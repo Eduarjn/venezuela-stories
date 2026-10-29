@@ -8,6 +8,7 @@ pydantic>=2.14,<3
 # Módulo 1 - story_engine.py (roteiro + prompts de cena em JSON)
 anthropic>=2.3,<3
 requests>=2.34,<3
+beautifulsoup4>=4.15,<5
 
 # Módulo 2 - visual_generator.py (imagens via Gemini, clipes animados)
 google-genai>=2.34,<3
@@ -15,6 +16,8 @@ pillow>=11.0,<12  # o moviepy 2.x exige pillow<12
 numpy>=2.5,<3
 
 # Módulo 3 - voice_engine.py (narração com timestamps por palavra)
+# TTS_PROVIDER=edge -> edge-tts (grátis) | TTS_PROVIDER=elevenlabs -> ElevenLabs (pago)
+edge-tts>=7.3,<8
 elevenlabs>=2.75,<3
 
 # Módulo 4 - video_editor.py (montagem; o FFmpeg faz o trabalho pesado)

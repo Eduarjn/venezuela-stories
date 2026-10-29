@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS sources (
     url         TEXT NOT NULL,
     domain      TEXT NOT NULL,
     title       TEXT,
+    verification TEXT,
     added_at    TEXT NOT NULL,
     UNIQUE (topic_id, url)
 );
@@ -157,6 +158,10 @@ class StoryDatabase:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            # Migração: bancos criados antes da coluna "verification".
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(sources)")}
+            if "verification" not in columns:
+                conn.execute("ALTER TABLE sources ADD COLUMN verification TEXT")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -224,7 +229,7 @@ class StoryDatabase:
     def sources(self, topic_id: int) -> list[sqlite3.Row]:
         with self._connect() as conn:
             return conn.execute(
-                "SELECT url, domain, title, added_at FROM sources WHERE topic_id = ? ORDER BY id",
+                "SELECT url, domain, title, verification, added_at FROM sources WHERE topic_id = ? ORDER BY id",
                 (topic_id,),
             ).fetchall()
 
@@ -288,13 +293,20 @@ class StoryDatabase:
                 topic_id = cursor.lastrowid
         return self.get(topic_id)
 
-    def add_source(self, topic_id: int, url: str, title: str | None = None) -> None:
+    def add_source(
+        self,
+        topic_id: int,
+        url: str,
+        title: str | None = None,
+        verification: str | None = None,
+    ) -> None:
+        """verification: como a fonte foi confirmada (page, citation ou search_result)."""
         domain = base_domain(url)
         with self._connect() as conn:
             conn.execute(
-                """INSERT OR IGNORE INTO sources (topic_id, url, domain, title, added_at)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (topic_id, url, domain, title, _now()),
+                """INSERT OR IGNORE INTO sources (topic_id, url, domain, title, verification, added_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (topic_id, url, domain, title, verification, _now()),
             )
 
     def set_status(
