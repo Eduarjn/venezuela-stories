@@ -120,7 +120,8 @@ class StoryDatabaseTest(unittest.TestCase):
     def test_rejected_topic_is_blocked_forever(self):
         topic = self.reserve_miranda()
         self.db.set_status(topic.id, "scripted")
-        self.db.set_status(topic.id, "rejected", error="fato não confirmado")
+        rejected = self.db.set_status(topic.id, "rejected", error="fato não confirmado")
+        self.assertIsNone(rejected.scheduled_date)
         with self.assertRaises(DuplicateTopicError):
             self.reserve_miranda(DAY3)
 

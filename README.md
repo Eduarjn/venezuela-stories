@@ -8,7 +8,7 @@ fatos históricos da Venezuela (TikTok, Reels, YouTube Shorts).
 ```
 venezuela-stories/
 ├── database.py            # Parte 1 – histórico de temas (SQLite)
-├── story_engine.py        # Parte 2 – roteiro + prompts de cena (JSON)        [a fazer]
+├── story_engine.py        # Parte 2 – roteiro + prompts de cena (JSON)
 ├── visual_generator.py    # Parte 3 – imagens (Gemini) + clipes animados        [a fazer]
 ├── voice_engine.py        # Parte 4 – narração + timestamps por palavra         [a fazer]
 ├── video_editor.py        # Parte 5 – montagem final (FFmpeg/MoviePy)           [a fazer]
@@ -47,5 +47,30 @@ Fluxo de status: `reserved → scripted → verified → rendered → published`
 ```bash
 python database.py list                                   # histórico
 python database.py check "Relâmpago do Catatumbo"         # já foi usado?
-python -m unittest -v tests/test_database.py              # testes
+python -m unittest discover -s tests -v                   # testes
 ```
+
+## Gerar o roteiro do dia (`story_engine.py`)
+
+```bash
+python story_engine.py                                     # hoje, primeiro idioma de VIDEO_LANGUAGES
+python story_engine.py --date 2026-11-05 --language es-419
+```
+
+Saída: `output/AAAA-MM-DD/current_episode.json` com `scenes` (`scene_id`, `narration_text`,
+`image_prompt`, `motion_type`, `sfx_cue`), a pergunta em aberto, a cena do clímax, as fontes
+conferidas e o texto da publicação.
+
+Antes de salvar, o episódio passa por:
+
+| Checagem | Se falhar |
+|---|---|
+| JSON válido e no schema | o erro volta para o modelo, que corrige (até 4 tentativas) |
+| Hook ≤ 10 palavras, sem "Hoje vou falar…", "Neste vídeo…", "Você sabia…" | idem |
+| 12–22 cenas de 3–16 palavras (3–5 s), duração total 35–90 s | idem |
+| Pergunta lançada nas cenas 1–3 e respondida nos últimos 40% | idem |
+| Tema inédito no banco | o modelo escolhe outro tema |
+| Trilha `fact`: cada fonte é aberta e o trecho citado precisa estar na página; 2+ domínios | o modelo pesquisa de novo ou retira o dado |
+| Trilha `fiction`: rótulo de lenda/ficção nas 4 primeiras cenas | o modelo corrige |
+
+Só depois disso o tema é gravado no banco como `verified`.

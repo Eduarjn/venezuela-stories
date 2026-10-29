@@ -328,8 +328,9 @@ class StoryDatabase:
             fields["error"] = error
         if status == "published":
             fields["published_at"] = now
-        if status == "failed":
-            # Libera o dia para outro tema; o tema em si pode ser tentado depois.
+        if status in ("failed", "rejected"):
+            # Libera o dia para outro tema. "failed" ainda pode ser tentado depois;
+            # "rejected" continua bloqueado por find_duplicate.
             fields["scheduled_date"] = None
 
         assignments = ", ".join(f"{k} = ?" for k in fields)
