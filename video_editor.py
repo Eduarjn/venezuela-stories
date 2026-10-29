@@ -134,7 +134,10 @@ def transition_for(scene_index: int, sfx_cue: str) -> str | None:
 
 
 def find_sfx(cue: str, sfx_dir: Path) -> Path | None:
-    for name in SFX_ALIASES.get(cue, [cue]):
+    """Arquivo do efeito: primeiro os seus (whoosh.mp3, impact.wav...), por último o
+    sintético gerado pelo setup_assets.py ({cue}_synth.wav)."""
+    names = SFX_ALIASES.get(cue, [cue])
+    for name in [*names, f"{cue}_synth"]:
         for ext in AUDIO_EXTENSIONS:
             candidate = sfx_dir / f"{name}{ext}"
             if candidate.exists():
