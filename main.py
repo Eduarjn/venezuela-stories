@@ -338,6 +338,14 @@ def run_pipeline(
 # --------------------------------------------------------------------------- CLI
 
 
+def utf8_console() -> None:
+    """No Windows, saída redirecionada (pipe, Claude Code, agendador) usa cp1252 e quebra
+    com ✓/✗. Força UTF-8 e troca o que não der para escrever, em vez de travar."""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def setup_logging(day: date) -> None:
     logs = PROJECT_DIR / "logs"
     logs.mkdir(exist_ok=True)
@@ -354,6 +362,7 @@ def setup_logging(day: date) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    utf8_console()
     try:
         from dotenv import load_dotenv
 

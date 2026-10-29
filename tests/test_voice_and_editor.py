@@ -40,6 +40,11 @@ from voice_engine import (  # noqa: E402
     words_from_characters,
 )
 
+def pixels(img):
+    # Pillow >= 12.1 tem get_flattened_data; getdata sai no Pillow 14.
+    return getattr(img, "get_flattened_data", img.getdata)()
+
+
 HAS_FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 DAY = date(2026, 11, 1)
 
@@ -261,10 +266,10 @@ class EndToEndTest(unittest.TestCase):
                                capture_output=True, check=True).stdout
         img = Image.open(io.BytesIO(frame)).convert("RGB")
         band = img.crop((0, 1080, 1080, 1280))
-        yellow = sum(1 for r, g, b in band.getdata() if r > 200 and g > 170 and b < 90)
+        yellow = sum(1 for r, g, b in pixels(band) if r > 200 and g > 170 and b < 90)
         self.assertGreater(yellow, 500, "nenhuma palavra amarela na altura dos olhos")
         top = img.crop((0, 100, 1080, 300))
-        self.assertEqual(sum(1 for r, g, b in top.getdata() if r > 200 and g > 170 and b < 90), 0)
+        self.assertEqual(sum(1 for r, g, b in pixels(top) if r > 200 and g > 170 and b < 90), 0)
 
 
 if __name__ == "__main__":

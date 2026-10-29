@@ -174,7 +174,16 @@ def report(sfx_dir: Path = SFX_DIR, music_dir: Path = MUSIC_DIR) -> bool:
     return ok and bool(tracks)
 
 
+def utf8_console() -> None:
+    """No Windows, saída redirecionada (pipe, Claude Code, agendador) usa cp1252 e quebra
+    com ✓/✗. Força UTF-8 e troca o que não der para escrever, em vez de travar."""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    utf8_console()
     parser = argparse.ArgumentParser(description="Gera os SFX e a trilha que faltam.")
     parser.add_argument("--list", action="store_true", help="só mostra o que existe")
     parser.add_argument("--force", action="store_true", help="regenera os arquivos *_synth")
