@@ -1,5 +1,15 @@
 # Venezuela Stories
 
+## Primeiro "Play" (5 passos)
+
+```bash
+1. python -m venv .venv && .venv\Scripts\activate        # Mac/Linux: source .venv/bin/activate
+2. pip install -r requirements.txt                          # e instale o FFmpeg (ffmpeg -version)
+3. copy .env.example .env                                   # Mac/Linux: cp — preencha as chaves e GEMINI_IMAGE_MODEL
+4. python main.py --check   &&   python main.py             # testa e gera o 1º vídeo agora
+5. start_scheduler.bat  +  install_autostart_windows.bat    # Mac/Linux: ./start_scheduler.sh && ./install_autostart.sh
+```
+
 Gerador local de 1 vídeo vertical por dia com histórias reais, curiosidades e
 fatos históricos da Venezuela (TikTok, Reels, YouTube Shorts).
 
@@ -12,7 +22,8 @@ venezuela-stories/
 ├── visual_generator.py    # Parte 3 – imagens (Gemini) + clipes animados
 ├── voice_engine.py        # Parte 4 – narração + timestamps por palavra
 ├── video_editor.py        # Parte 5 – montagem final (FFmpeg)
-├── daily_scheduler.py     # Parte 6 – execução diária automática                [a fazer]
+├── main.py                # orquestrador com checkpoint
+├── daily_scheduler.py     # Parte 6 – execução diária automática
 ├── data/                  # stories.db (não vai para o Git)
 ├── output/AAAA-MM-DD/     # roteiro, imagens, áudio e vídeo final de cada dia
 ├── assets/music|sfx|fonts # trilhas, efeitos e fontes licenciados (locais)
@@ -152,3 +163,39 @@ O que o editor faz:
   concatenadas sem recodificar; uma passada final aplica legendas + mix. Num teste com 14 cenas
   (37 s) o pico foi ~520 MB. Para limitar CPU/RAM, use `FFMPEG_THREADS=2`.
 - Marca o tema no banco como `rendered`.
+
+## Piloto automático (`main.py` + `daily_scheduler.py`)
+
+```bash
+python main.py                          # vídeo de hoje (retoma se já começou)
+python main.py --check                  # FFmpeg, chaves, disco e internet
+python main.py --status                 # checkpoint de hoje
+python main.py --mark-published 2026-11-05
+```
+
+Saída do dia: `output/AAAA-MM-DD_titulo-do-video.mp4` e `output/AAAA-MM-DD/post_copy.txt`
+(título, descrição com hashtags, hashtags, fontes e checklist antes de publicar).
+
+**Anti-falhas**
+
+- `output/AAAA-MM-DD/checkpoint.json` guarda cada passo (`story → visuals → voice → edit`).
+  Passo concluído nunca roda de novo; dentro dos passos, imagens, áudios e clipes prontos são
+  reaproveitados. Uma queda no meio não gasta crédito de novo.
+- Cada passo: até 3 tentativas (espera 1 min e 5 min). Antes dos passos que usam API, espera a
+  internet voltar por até 30 min.
+- Health check antes de começar; trava contra duas execuções simultâneas; log em `logs/AAAA-MM-DD.log`.
+
+**Agendador**
+
+- Roda `main.py` todo dia em `DAILY_RUN_TIME`. Se o PC estava desligado no horário, roda ao ligar.
+- Se falhar, tenta de novo a cada `RETRY_MINUTES` (até `MAX_RUNS_PER_DAY`), retomando do checkpoint.
+- Cada execução é um processo separado (se travar, o agendador segue vivo; memória liberada).
+- Só um agendador por computador. Log: `logs/scheduler.log`.
+
+| Sistema | Iniciar agora | Iniciar ao ligar o PC |
+|---|---|---|
+| Windows | `start_scheduler.bat` (sem janela) | `install_autostart_windows.bat` (pasta Inicializar) |
+| Mac/Linux | `./start_scheduler.sh` | `./install_autostart.sh` (crontab `@reboot`) |
+
+O PC precisa estar ligado (pode estar com a tela bloqueada) no horário. A publicação continua
+manual: assista ao vídeo, cole o `post_copy.txt` e rode `--mark-published`.
