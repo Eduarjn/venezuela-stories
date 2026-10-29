@@ -5,7 +5,7 @@
 ```bash
 1. python -m venv .venv && .venv\Scripts\activate        # Mac/Linux: source .venv/bin/activate
 2. pip install -r requirements.txt && python setup_assets.py   # + FFmpeg instalado (ffmpeg -version)
-3. copy .env.example .env                                   # Mac/Linux: cp — preencha as chaves e GEMINI_IMAGE_MODEL
+3. copy .env.example .env      # Mac/Linux: cp — preencha ANTHROPIC_API_KEY, ANTHROPIC_MODEL, GEMINI_API_KEY e GEMINI_IMAGE_MODEL (--list-models)
 4. python main.py --check   &&   python main.py             # testa e gera o 1º vídeo agora
 5. start_scheduler.bat  +  install_autostart_windows.bat    # Mac/Linux: ./start_scheduler.sh && ./install_autostart.sh
 ```
@@ -146,12 +146,12 @@ Coloque seus arquivos (com licença de uso):
 |---|---|
 | `assets/sfx/` | `whoosh.mp3`, `impact.mp3` (usado para `thunder`), `riser.mp3` (para `suspense_riser`), `click.mp3` (para `old_film_click`), `crowd.mp3` (para `crowd_murmur`). Também aceita o nome exato do `sfx_cue`. |
 | `assets/music/` | trilhas de suspense/históricas (`.mp3/.wav/.m4a`); cada episódio usa uma, alternando |
+| `assets/fonts/` | opcional: `.ttf/.otf` da fonte das legendas (defina `SUBTITLE_FONT` com o nome dela) |
 
 Sem arquivos? `python setup_assets.py` sintetiza com FFmpeg os 5 efeitos (`{cue}_synth.wav`) e um
 drone de tensão de 64 s (`tension_drone_synth.wav`), sem direitos de terceiros. Seus arquivos
 sempre têm prioridade sobre os sintéticos e nunca são sobrescritos; `--list` mostra o que o editor
 vai usar. O drone serve para testar — troque por uma trilha real com licença.
-| `assets/fonts/` | opcional: `.ttf/.otf` da fonte das legendas (defina `SUBTITLE_FONT` com o nome dela) |
 
 O que o editor faz:
 
