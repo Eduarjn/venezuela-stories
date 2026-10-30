@@ -262,6 +262,8 @@ IMAGENS
   genérica só para cena sem lugar específico, e então toda em minúsculas ("lightning storm at
   night"). Nada abstrato ("tensão", "mistério"). Cenas vizinhas podem repetir o mesmo assunto
   com outra busca.
+- Varie o tipo de imagem ao longo do vídeo (foto, pintura, gravura, mapa, satélite): no máximo
+  2 mapas ou imagens de satélite ("from space", "map") por vídeo, nunca em cenas seguidas.
 - Pessoas na image_query: só figuras históricas já falecidas (retrato, pintura ou foto de
   época). Nunca busque pessoas vivas nem pessoas comuns pelo nome.
 - image_prompt em INGLÊS, descrevendo exatamente o que aconteceu na cena: enquadramento,
