@@ -102,8 +102,10 @@ class PipelineTest(unittest.TestCase):
 
     def test_claude_code_backend_needs_no_api_key_but_needs_claude(self):
         env = {"ANTHROPIC_BACKEND": "claude_code", "ANTHROPIC_API_KEY": "", "ANTHROPIC_MODEL": ""}
-        with mock.patch.dict(os.environ, env), mock.patch("shutil.which",
-                                                         side_effect=lambda t: None if t == "claude" else "/x"):
+        # Simula "Claude Code não instalado" na função que o procura (no Windows ela também
+        # tenta claude.exe e o caminho do instalador, então mockar só shutil.which não basta).
+        with mock.patch.dict(os.environ, env), \
+                mock.patch("story_engine.find_claude_binary", return_value=None):
             problems = main.health_problems()
         self.assertFalse(any("ANTHROPIC_API_KEY" in p or "ANTHROPIC_MODEL" in p for p in problems), problems)
         self.assertTrue(any("Claude Code" in p for p in problems), problems)
