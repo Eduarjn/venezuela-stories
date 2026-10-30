@@ -340,6 +340,24 @@ def clear_episode_visuals(visuals_dir: Path) -> None:
             path.unlink()
 
 
+def reject_scene_images(visuals_dir: Path, scene_ids: list[int]) -> None:
+    """Troca só estas cenas: apaga imagem e clipe, e a imagem recusada não volta no episódio.
+    Cenas que copiavam a imagem de uma cena trocada também são refeitas."""
+    credits_path = visuals_dir / "credits.json"
+    credits = json.loads(credits_path.read_text(encoding="utf-8")) if credits_path.exists() else {}
+    rejected_path = visuals_dir / "rejected.json"
+    rejected = json.loads(rejected_path.read_text(encoding="utf-8")) if rejected_path.exists() else []
+    redo = set(scene_ids) | {int(k) for k, v in credits.items() if v.get("reused_from_scene") in scene_ids}
+    for sid in sorted(redo):
+        entry = credits.pop(str(sid), {})
+        if sid in scene_ids and entry.get("page_url"):
+            rejected.append(entry["page_url"])
+        for suffix in (".png", ".mp4"):
+            (visuals_dir / f"scene_{sid:02d}{suffix}").unlink(missing_ok=True)
+    credits_path.write_text(json.dumps(credits, ensure_ascii=False, indent=2), encoding="utf-8")
+    rejected_path.write_text(json.dumps(rejected, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def resolve_image_provider() -> str:
     """stock = imagens reais grátis (Wikimedia/Pexels); gemini = imagens geradas (pago)."""
     provider = (os.getenv("IMAGE_PROVIDER") or "stock").strip().lower()
@@ -445,6 +463,9 @@ class VisualGenerator:
         credits_path = visuals_dir / "credits.json"
         credits: dict = json.loads(credits_path.read_text(encoding="utf-8")) if credits_path.exists() else {}
         used = {c["page_url"] for c in credits.values() if c.get("page_url")}
+        rejected_path = visuals_dir / "rejected.json"
+        if rejected_path.exists():  # imagens recusadas na revisão nunca voltam neste episódio
+            used |= set(json.loads(rejected_path.read_text(encoding="utf-8")))
         missing = []
         for scene in episode["scenes"]:
             sid = scene["scene_id"]

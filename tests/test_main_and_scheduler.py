@@ -174,6 +174,28 @@ class RedoImagesTest(unittest.TestCase):
                          connectivity=lambda: True, check_health=False)
             self.assertEqual(calls, ["visuals", "edit"])  # roteiro e narração não são refeitos
 
+    def test_only_the_chosen_scenes_are_redone(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"OUTPUT_DIR": str(Path(tmp) / "output")}), \
+                mock.patch("main.episodes_dir", return_value=Path(tmp) / "episodes"):
+            main.day_dir(DAY).mkdir(parents=True)
+            (main.day_dir(DAY) / "current_episode.json").write_text(json.dumps(
+                {"topic_id": 9, "scenes": [{"scene_id": 1}, {"scene_id": 2}]}))
+            visuals = Path(tmp) / "episodes" / "9" / "visuals"
+            visuals.mkdir(parents=True)
+            for name in ("scene_01.png", "scene_02.png"):
+                (visuals / name).write_bytes(b"x")
+            (visuals / "credits.json").write_text(json.dumps({
+                "1": {"source": "wikimedia", "page_url": "u1"}, "2": {"source": "wikimedia", "page_url": "u2"}}))
+
+            main.redo_images(DAY, [2])
+            self.assertTrue((visuals / "scene_01.png").exists())
+            self.assertFalse((visuals / "scene_02.png").exists())
+            self.assertEqual(json.loads((visuals / "rejected.json").read_text()), ["u2"])
+            self.assertEqual(Checkpoint.load(DAY).steps["visuals"], "pending")
+            with self.assertRaises(PipelineError):
+                main.redo_images(DAY, [7])  # cena que não existe
+
     def test_post_copy_is_rebuilt_without_rendering(self):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ, {"OUTPUT_DIR": tmp}), \

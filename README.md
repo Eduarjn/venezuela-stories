@@ -136,7 +136,9 @@ No modo `stock`, para cada cena de `current_episode.json`:
    de que a imagem foi recortada e animada, que a licença exige) e **opcionais** (domínio
    público, CC0 e Pexels: crédito por cortesia).
 6. O `post_copy.txt` termina com a **REVISÃO** (não é para colar): a imagem de cada cena ao lado
-   da narração, para ver em segundos se a narração cita um lugar e a imagem é de outro.
+   da narração, para ver em segundos se a narração cita um lugar e a imagem é de outro. Para
+   trocar uma cena: ajuste a `image_query` dela em `current_episode.json` (opcional) e rode
+   `python main.py --date AAAA-MM-DD --redo-images N`.
 
 No modo `gemini`, cada cena usa o `image_prompt` com o **prefixo fixo de estilo** (mesmo
 "diretor de arte" em todas as cenas; troque em `VISUAL_STYLE_PREFIX`) e é gerada em 9:16: 1
@@ -224,6 +226,7 @@ python main.py --check                  # FFmpeg, chaves, disco e internet
 python main.py --status                 # checkpoint de hoje
 python main.py --mark-published 2026-11-05
 python main.py --date 2026-11-05 --redo-images   # novas imagens e vídeo remontado (roteiro e voz ficam)
+python main.py --date 2026-11-05 --redo-images 3 7   # troca só as cenas 3 e 7 (a imagem recusada não volta)
 python main.py --date 2026-11-05 --post-copy     # só refaz o post_copy.txt (sem renderizar)
 ```
 

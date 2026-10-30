@@ -327,17 +327,24 @@ def load_image_credits(episode: dict) -> ImageCredits:
     return credits
 
 
-def redo_images(day: date) -> None:
-    """Apaga as imagens do dia e marca visuals/edit para rodar de novo (roteiro e voz ficam)."""
-    from visual_generator import clear_episode_visuals
+def redo_images(day: date, scenes: list[int] | None = None) -> None:
+    """Apaga as imagens do dia (ou só das cenas indicadas, sem repetir a imagem recusada) e
+    marca visuals/edit para rodar de novo. Roteiro e narração ficam."""
+    from visual_generator import clear_episode_visuals, reject_scene_images
 
     episode_path = day_dir(day) / "current_episode.json"
     if not episode_path.exists():
         raise PipelineError(f"{episode_path} não existe: ainda não há episódio em {day}")
     episode = json.loads(episode_path.read_text(encoding="utf-8"))
     visuals = episodes_dir() / str(episode.get("topic_id")) / "visuals"
+    unknown = sorted(set(scenes or []) - {s["scene_id"] for s in episode.get("scenes", [])})
+    if unknown:
+        raise PipelineError(f"cena(s) {unknown} não existem no episódio de {day}")
     if visuals.exists():
-        clear_episode_visuals(visuals)
+        if scenes:
+            reject_scene_images(visuals, scenes)
+        else:
+            clear_episode_visuals(visuals)
     cp = Checkpoint.load(day)
     for step in ("visuals", "edit"):
         cp.steps[step] = "pending"
@@ -483,9 +490,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="só roda o health check")
     parser.add_argument("--status", action="store_true", help="mostra o checkpoint do dia")
     parser.add_argument("--mark-published", type=date.fromisoformat, metavar="AAAA-MM-DD")
-    parser.add_argument("--redo-images", action="store_true",
-                        help="apaga as imagens do dia, busca de novo e remonta o vídeo "
-                             "(o roteiro e a narração são reaproveitados)")
+    parser.add_argument("--redo-images", nargs="*", type=int, metavar="CENA",
+                        help="busca imagens novas e remonta o vídeo (roteiro e narração ficam). "
+                             "Sem números: todas as cenas. Com números (ex.: 3 7): só essas, "
+                             "sem repetir a imagem recusada")
     parser.add_argument("--post-copy", action="store_true",
                         help="só refaz o post_copy.txt do dia (sem renderizar o vídeo)")
     args = parser.parse_args(argv)
@@ -527,8 +535,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         with RunLock():
-            if args.redo_images:
-                redo_images(args.date)
+            if args.redo_images is not None:
+                redo_images(args.date, args.redo_images or None)
             cp = run_pipeline(args.date)
     except PipelineError as exc:
         log.error("%s", exc)

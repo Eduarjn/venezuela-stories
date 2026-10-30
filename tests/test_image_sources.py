@@ -252,6 +252,30 @@ class StockEpisodeTest(unittest.TestCase):
         self.assertEqual([credits[k]["title"] for k in ("1", "2", "3")], ["Lake", "Lake2", "Bolivar"])
         self.assertEqual(source.queries.count("lake"), 1)  # a 2ª passada reaproveita a busca
 
+    def test_rejecting_one_scene_keeps_the_others_and_never_brings_it_back(self):
+        from visual_generator import reject_scene_images
+
+        source = FakeSource("wikimedia", {"lake": [cand("Lake"), cand("Lake2")], "bolivar": [cand("Bolivar")]})
+        visuals = self.generator(source).process_episode(DAY).parent  # 1 Lake, 2 Lake2, 3 Bolivar
+        reject_scene_images(visuals, [2])
+        self.assertFalse((visuals / "scene_02.png").exists())
+        self.assertTrue((visuals / "scene_01.png").exists())
+        more = FakeSource("wikimedia", {"lake": [cand("Lake"), cand("Lake2"), cand("Lake3")],
+                                        "bolivar": [cand("Bolivar")]})
+        self.generator(more).process_episode(DAY)
+        credits = json.loads((visuals / "credits.json").read_text(encoding="utf-8"))
+        self.assertEqual([credits[k]["title"] for k in ("1", "2", "3")], ["Lake", "Lake3", "Bolivar"])
+
+    def test_scenes_copying_a_rejected_image_are_redone_too(self):
+        from visual_generator import reject_scene_images
+
+        visuals = self.generator(FakeSource("wikimedia", {"lake": [cand("Lake")]})).process_episode(DAY).parent
+        reject_scene_images(visuals, [1])  # 2 e 3 copiavam a imagem da 1
+        self.assertEqual(list(visuals.glob("scene_*.png")), [])
+        self.generator(FakeSource("wikimedia", {"lake": [cand("Lake"), cand("LakeB")]})).process_episode(DAY)
+        credits = json.loads((visuals / "credits.json").read_text(encoding="utf-8"))
+        self.assertEqual(credits["1"]["title"], "LakeB")
+
     def test_refresh_searches_again(self):
         self.generator(FakeSource("wikimedia", {"lake": [cand("Lake")]})).process_episode(DAY)
         again = FakeSource("wikimedia", {"nothing": [cand("A")], "bolivar": [cand("B")], "lake": [cand("C")]})
