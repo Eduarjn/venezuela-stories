@@ -325,7 +325,10 @@ def run_pipeline(
                 cp.save()
                 log.error("[%s] falhou: %s", name, exc)
                 log.debug("%s", traceback.format_exc())
-                if attempt == STEP_ATTEMPTS or isinstance(exc, PipelineError):
+                # Erros marcados retryable=False (ex.: cota do Gemini esgotada) não se
+                # resolvem esperando: falha já, sem as esperas de 1 e 5 minutos.
+                if (attempt == STEP_ATTEMPTS or isinstance(exc, PipelineError)
+                        or getattr(exc, "retryable", True) is False):
                     raise PipelineError(
                         f"passo '{name}' falhou {attempt}x. Corrija e rode de novo: "
                         f"python main.py --date {day} (retoma deste passo)"

@@ -26,6 +26,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -111,6 +112,12 @@ class VisualGeneratorError(RuntimeError):
 
 class NoImageReturned(VisualGeneratorError):
     """O modelo respondeu sem imagem (ex.: filtro de segurança)."""
+
+
+class QuotaExhausted(VisualGeneratorError):
+    """Cota do Gemini sem saída hoje: tentar de novo só gasta tempo."""
+
+    retryable = False  # main.py não repete o passo
 
 
 # --------------------------------------------------------------------------- movimento
@@ -220,6 +227,26 @@ def _is_retryable(exc: Exception) -> bool:
     return code not in NON_RETRYABLE_CODES
 
 
+MAX_RATE_LIMIT_WAIT_SECONDS = 90
+
+
+def classify_rate_limit(exc: Exception) -> tuple[str, float | None]:
+    """Para um erro 429, diz se é cota esgotada ("hard") ou limite por minuto ("soft").
+
+    - "limit: 0": o modelo não tem cota no seu plano (ex.: imagem no plano gratuito);
+    - cota "PerDay": acabou a do dia;
+    nos dois casos esperar alguns segundos não resolve. Fora isso é limite por minuto,
+    e o Google informa quanto esperar (retryDelay).
+    """
+    text = str(exc)
+    if re.search(r"limit:\s*0\b", text) or "PerDay" in text:
+        return "hard", None
+    match = re.search(r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s", text) or \
+        re.search(r"retry in (\d+(?:\.\d+)?)\s*s", text, re.IGNORECASE)
+    delay = float(match.group(1)) if match else None
+    return "soft", delay
+
+
 class GeminiImageClient:
     """Gera uma imagem 9:16 com o SDK google-genai.
 
@@ -319,6 +346,20 @@ class VisualGenerator:
                 return path
             except Exception as exc:
                 last_error = exc
+                code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+                rate_wait = None
+                if code == 429:
+                    kind, rate_wait = classify_rate_limit(exc)
+                    if kind == "hard":
+                        raise QuotaExhausted(
+                            "Cota de imagens do Gemini esgotada ou inexistente para "
+                            f"'{getattr(self.image_client, 'model', '?')}' (erro 429). "
+                            "No plano gratuito a geração de imagem não tem cota: ative o "
+                            "faturamento do projeto da sua chave no Google AI Studio "
+                            "(aistudio.google.com > Get API key > Set up billing) ou troque "
+                            "GEMINI_IMAGE_MODEL. Depois rode de novo: o roteiro já gerado é "
+                            "reaproveitado."
+                        ) from exc
                 if not _is_retryable(exc):
                     raise VisualGeneratorError(
                         f"{path.name}: erro de configuração/permissão ({exc}); "
@@ -326,6 +367,8 @@ class VisualGenerator:
                     ) from exc
                 if attempt < MAX_IMAGE_ATTEMPTS:
                     wait = BACKOFF_SECONDS[attempt - 1]
+                    if rate_wait is not None:  # limite por minuto: espera o que o Google pediu
+                        wait = min(MAX_RATE_LIMIT_WAIT_SECONDS, max(wait, rate_wait))
                     log.warning("%s: tentativa %s falhou (%s); nova tentativa em %ss",
                                 path.name, attempt, exc, wait)
                     self.sleep(wait)

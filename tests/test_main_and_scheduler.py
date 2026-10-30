@@ -82,6 +82,22 @@ class PipelineTest(unittest.TestCase):
         self.run_(self.steps(), online=lambda: next(answers))
         self.assertEqual(self.waits[:2], [60, 60])
 
+    def test_error_marked_not_retryable_stops_without_waiting(self):
+        steps = self.steps()
+
+        class QuotaGone(Exception):
+            retryable = False
+
+        def no_quota(day):
+            self.calls.append("visuals")
+            raise QuotaGone("429 limit: 0")
+        steps["visuals"] = no_quota
+        with self.assertRaises(PipelineError):
+            self.run_(steps)
+        self.assertEqual(self.calls, ["story", "visuals"])
+        self.assertEqual(self.waits, [])  # nada das esperas de 1 e 5 minutos
+        self.assertEqual(Checkpoint.load(DAY).steps["story"], "done")
+
     def test_pipeline_error_is_not_retried(self):
         steps = self.steps()
 

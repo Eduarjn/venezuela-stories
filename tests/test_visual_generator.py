@@ -22,9 +22,11 @@ from visual_generator import (  # noqa: E402
     WIDTH,
     GeminiImageClient,
     NoImageReturned,
+    QuotaExhausted,
     VisualGenerator,
     VisualGeneratorError,
     build_image_prompt,
+    classify_rate_limit,
     estimate_duration,
     fit_vertical,
     motion_filter,
@@ -59,6 +61,22 @@ class FakeImageClient:
         if isinstance(reply, Exception):
             raise reply
         return reply
+
+
+def gemini_429(limit="0", quota_id="GenerateRequestsPerDayPerProjectPerModel-FreeTier", delay="19s"):
+    """Erro 429 real do SDK, no formato que a API do Gemini devolve."""
+    from google.genai import errors
+
+    return errors.ClientError(429, {"error": {
+        "code": 429, "status": "RESOURCE_EXHAUSTED",
+        "message": ("You exceeded your current quota. Quota exceeded for metric: "
+                    "generativelanguage.googleapis.com/generate_content_free_tier_requests, "
+                    f"limit: {limit}, model: gemini-3.1-flash-image\nPlease retry in 19.8s."),
+        "details": [
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+             "violations": [{"quotaId": quota_id}]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": delay},
+        ]}})
 
 
 def fake_render(image, motion, duration, output):
@@ -129,6 +147,33 @@ class VisualGeneratorTest(unittest.TestCase):
             self.generator(client).generate_image("A lake", self.out / "a.png")
         self.assertEqual(len(client.prompts), 4)
         self.assertEqual(self.waits, list(BACKOFF_SECONDS))
+
+    def test_free_tier_without_image_quota_fails_fast_without_waiting(self):
+        client = FakeImageClient(gemini_429(limit="0"))
+        with self.assertRaisesRegex(QuotaExhausted, "faturamento"):
+            self.generator(client).generate_image("A lake", self.out / "a.png")
+        self.assertEqual(len(client.prompts), 1)
+        self.assertEqual(self.waits, [])
+        self.assertFalse(QuotaExhausted.retryable)
+
+    def test_daily_quota_used_up_fails_fast(self):
+        client = FakeImageClient(gemini_429(limit="100", quota_id="GenerateRequestsPerDayPerProjectPerModel"))
+        with self.assertRaises(QuotaExhausted):
+            self.generator(client).generate_image("A lake", self.out / "a.png")
+        self.assertEqual(len(client.prompts), 1)
+
+    def test_per_minute_limit_waits_what_google_asks_then_succeeds(self):
+        client = FakeImageClient(
+            gemini_429(limit="10", quota_id="GenerateRequestsPerMinutePerProjectPerModel", delay="37s"),
+            png_bytes())
+        self.generator(client).generate_image("A lake", self.out / "a.png")
+        self.assertEqual(self.waits, [37.0])
+
+    def test_rate_limit_classification(self):
+        self.assertEqual(classify_rate_limit(gemini_429(limit="0")), ("hard", None))
+        kind, delay = classify_rate_limit(
+            gemini_429(limit="10", quota_id="GenerateRequestsPerMinutePerProjectPerModel", delay="12s"))
+        self.assertEqual((kind, delay), ("soft", 12.0))
 
     def test_configuration_error_fails_fast(self):
         client = FakeImageClient(ApiError(404))
