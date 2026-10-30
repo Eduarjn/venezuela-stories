@@ -174,17 +174,27 @@ class StockImageFinder:
         self.sources = sources
         self.fetch = fetch
         self.min_short_side = min_short_side
+        # Cada busca roda uma vez por episódio: as cenas vizinhas reaproveitam os resultados.
+        self._results: dict[tuple[str, str], list[Candidate]] = {}
+        self._failed_downloads: set[str] = set()
+
+    def _search(self, source, query: str) -> list[Candidate]:
+        key = (source.name, query.lower())
+        if key not in self._results:
+            try:
+                self._results[key] = source.search(query)
+            except Exception as exc:  # rede, cota, chave errada: tenta a próxima fonte
+                log.warning("%s falhou para '%s': %s", source.name, query, exc)
+                self._results[key] = []
+        return self._results[key]
 
     def find(self, queries: list[str], used: set[str]) -> tuple[Candidate, bytes] | None:
         for query in queries:
             for source in self.sources:
-                try:
-                    candidates = source.search(query)
-                except Exception as exc:  # rede, cota, chave errada: tenta a próxima fonte
-                    log.warning("%s falhou para '%s': %s", source.name, query, exc)
-                    continue
-                for candidate in candidates:
+                for candidate in self._search(source, query):
                     if candidate.page_url in used or not candidate.download_url:
+                        continue
+                    if candidate.download_url in self._failed_downloads:
                         continue
                     if min(candidate.width, candidate.height) < self.min_short_side:
                         continue
@@ -192,6 +202,7 @@ class StockImageFinder:
                         data = self.fetch(candidate.download_url)
                     except Exception as exc:
                         log.warning("download falhou (%s): %s", candidate.download_url, exc)
+                        self._failed_downloads.add(candidate.download_url)
                         continue
                     log.info("'%s' -> %s (%s, %s)", query, candidate.title, candidate.source, candidate.license)
                     return candidate, data

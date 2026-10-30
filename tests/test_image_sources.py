@@ -146,6 +146,22 @@ class FinderTest(unittest.TestCase):
         self.assertEqual(found.title, "from_b")
         self.assertEqual(commons.queries, ["a", "b"])
 
+    def test_each_query_is_searched_once_and_failed_downloads_are_not_retried(self):
+        commons = FakeSource("wikimedia", {"q": [cand("broken"), cand("ok1"), cand("ok2")]})
+        fetched = []
+
+        def fetch(url):
+            fetched.append(url)
+            if "broken" in url:
+                raise ConnectionError("404")
+            return b"x"
+        finder = StockImageFinder([commons], fetch=fetch)
+        first, _ = finder.find(["q"], used=set())
+        second, _ = finder.find(["Q"], used={first.page_url})
+        self.assertEqual([first.title, second.title], ["ok1", "ok2"])
+        self.assertEqual(commons.queries, ["q"])
+        self.assertEqual(fetched.count("https://img/broken.jpg"), 1)
+
     def test_scene_queries_most_specific_first(self):
         scene = {"image_query": "Catatumbo lightning",
                  "image_prompt": "Wide shot of Lake Maracaibo at night with the Catatumbo River delta, "
@@ -204,6 +220,21 @@ class StockEpisodeTest(unittest.TestCase):
         self.assertEqual(credits["2"], {"reused_from_scene": 1})
         self.assertEqual(json.loads(manifest.read_text())["image_provider"], "stock")
 
+    def test_scene_without_results_takes_an_unused_image_from_a_neighbour_search(self):
+        # Antes de repetir uma imagem, a cena 2 usa a busca da cena 1 (a mais próxima, mesmo tema).
+        source = FakeSource("wikimedia", {"lake": [cand("Lake"), cand("Lake2")], "bolivar": [cand("Bolivar")]})
+        visuals = self.generator(source).process_episode(DAY).parent
+        credits = json.loads((visuals / "credits.json").read_text(encoding="utf-8"))
+        self.assertEqual([credits[k]["title"] for k in ("1", "2", "3")], ["Lake", "Lake2", "Bolivar"])
+        self.assertEqual(source.queries.count("lake"), 1)  # a 2ª passada reaproveita a busca
+
+    def test_refresh_searches_again(self):
+        self.generator(FakeSource("wikimedia", {"lake": [cand("Lake")]})).process_episode(DAY)
+        again = FakeSource("wikimedia", {"nothing": [cand("A")], "bolivar": [cand("B")], "lake": [cand("C")]})
+        visuals = self.generator(again).process_episode(DAY, refresh=True).parent
+        credits = json.loads((visuals / "credits.json").read_text(encoding="utf-8"))
+        self.assertEqual([credits[k]["title"] for k in ("1", "2", "3")], ["C", "A", "B"])
+
     def test_no_image_at_all_explains_options(self):
         with self.assertRaisesRegex(VisualGeneratorError, "PEXELS_API_KEY"):
             self.generator(FakeSource("wikimedia", {})).process_episode(DAY)
@@ -224,14 +255,39 @@ class StockEpisodeTest(unittest.TestCase):
 
 
 class PostCopyCreditsTest(unittest.TestCase):
-    def test_credits_go_into_post_copy(self):
+    EPISODE = {"post_title": "T", "post_description": "D", "hashtags": ["#v"], "track": "fiction",
+               "date": "2026-11-01", "topic_id": 9, "scenes": [{}, {}, {}]}
+
+    def test_required_and_optional_credits_are_separated(self):
         import main
 
-        text = main.build_post_copy({"post_title": "T", "post_description": "D", "hashtags": ["#v"],
-                                     "track": "fiction", "date": "2026-11-01"},
-                                    ['Imagem: "Lake" — Ana — CC BY 4.0 — https://commons/Lake'])
-        self.assertIn("CRÉDITOS DAS IMAGENS", text)
-        self.assertIn("Ana — CC BY 4.0", text)
+        pd = cand("Map")
+        pd.license, pd.attribution_required = "Public domain", False
+        with tempfile.TemporaryDirectory() as tmp:
+            visuals = Path(tmp) / "9" / "visuals"
+            visuals.mkdir(parents=True)
+            (visuals / "credits.json").write_text(json.dumps({
+                "1": cand("Lake").to_dict(), "2": pd.to_dict(), "3": {"reused_from_scene": 2}}))
+            with mock.patch("main.episodes_dir", return_value=Path(tmp)):
+                credits = main.load_image_credits(self.EPISODE)
+        self.assertEqual(credits.required, ['Imagem: "Lake" — Ana — CC BY 4.0 — https://commons/Lake'])
+        self.assertEqual(len(credits.optional), 1)
+        self.assertEqual(credits.reused_scenes, 1)
+
+        text = main.build_post_copy(self.EPISODE, credits)
+        required = text.index("CRÉDITOS DAS IMAGENS (obrigatório")
+        self.assertLess(required, text.index("Ana — CC BY 4.0"))
+        self.assertLess(text.index("Ana — CC BY 4.0"), text.index("Créditos opcionais"))
+        self.assertIn("ATENÇÃO: 1 de 3 cenas repetem", text)
+        self.assertIn("--date 2026-11-01 --redo-images", text)
+
+    def test_no_credits_section_without_real_images(self):
+        import main
+
+        text = main.build_post_copy(self.EPISODE)
+        self.assertNotIn("CRÉDITOS", text)
+        self.assertNotIn("ATENÇÃO", text)
+        self.assertIn("geradas por IA", text)
 
 
 if __name__ == "__main__":

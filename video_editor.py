@@ -31,6 +31,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -355,12 +356,17 @@ class VideoEditor:
         """Clipe de cada cena com a duração exata; depois concatena sem recodificar."""
         clips = []
         for p in plans:
-            clip = work / f"clip_{p.scene_id:02d}_{p.frames}f_{p.transition or 'cut'}.mp4"
+            # O nome inclui o conteúdo da imagem: trocar a imagem (--redo-images) refaz o clipe.
+            digest = hashlib.sha1(p.image.read_bytes()).hexdigest()[:10]
+            clip = work / f"clip_{p.scene_id:02d}_{p.frames}f_{p.transition or 'cut'}_{digest}.mp4"
             if not clip.exists():
                 log.info("Cena %s: %.2fs, %s, transição %s", p.scene_id, p.duration, p.motion,
                          p.transition or "corte seco")
                 render_clip(p.image, p.motion, p.duration, clip, transition=p.transition)
             clips.append(clip)
+        for old in work.glob("clip_*.mp4"):  # clipes de imagens/durações que não valem mais
+            if old not in clips:
+                old.unlink()
         listing = work / "clips.txt"
         listing.write_text("".join(f"file '{c.name}'\n" for c in clips), encoding="utf-8")
         video = work / "video_only.mp4"

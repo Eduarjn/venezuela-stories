@@ -333,6 +333,13 @@ class SceneVisual:
     duration: float
 
 
+def clear_episode_visuals(visuals_dir: Path) -> None:
+    """Apaga imagens, clipes e créditos de um episódio, para buscar (ou gerar) de novo."""
+    for pattern in ("scene_*.png", "scene_*.mp4", "credits.json", "manifest.json"):
+        for path in visuals_dir.glob(pattern):
+            path.unlink()
+
+
 def resolve_image_provider() -> str:
     """stock = imagens reais grátis (Wikimedia/Pexels); gemini = imagens geradas (pago)."""
     provider = (os.getenv("IMAGE_PROVIDER") or "stock").strip().lower()
@@ -414,6 +421,23 @@ class VisualGenerator:
             f"{path.name}: falhou após {MAX_IMAGE_ATTEMPTS} tentativas ({last_error})"
         ) from last_error
 
+    def _save_stock_image(self, sid: int, queries: list[str], visuals_dir: Path,
+                          used: set[str], credits: dict) -> bool:
+        found = self.stock.find(queries, used)
+        if found is None:
+            return False
+        candidate, data = found
+        used.add(candidate.page_url)  # inválida ou não, não tenta a mesma de novo
+        try:
+            fit_vertical(data).save(visuals_dir / f"scene_{sid:02d}.png", "PNG")
+        except Exception as exc:  # arquivo corrompido ou formato estranho
+            log.warning("Cena %s: imagem inválida (%s)", sid, exc)
+            return False
+        credits[str(sid)] = candidate.to_dict()
+        (visuals_dir / "credits.json").write_text(json.dumps(credits, ensure_ascii=False, indent=2),
+                                                  encoding="utf-8")
+        return True
+
     def _ensure_stock_images(self, episode: dict, visuals_dir: Path) -> None:
         """Baixa uma imagem real para cada cena; sem resultado, reaproveita a mais próxima."""
         from image_sources import scene_queries
@@ -424,23 +448,19 @@ class VisualGenerator:
         missing = []
         for scene in episode["scenes"]:
             sid = scene["scene_id"]
-            path = visuals_dir / f"scene_{sid:02d}.png"
-            if path.exists():
+            if (visuals_dir / f"scene_{sid:02d}.png").exists():
                 continue
-            found = self.stock.find(scene_queries(scene, episode), used)
-            if found is None:
+            if not self._save_stock_image(sid, scene_queries(scene, episode), visuals_dir, used, credits):
                 missing.append(sid)
-                continue
-            candidate, data = found
-            try:
-                fit_vertical(data).save(path, "PNG")
-            except Exception as exc:  # arquivo corrompido ou formato estranho
-                log.warning("Cena %s: imagem inválida (%s)", sid, exc)
-                missing.append(sid)
-                continue
-            used.add(candidate.page_url)
-            credits[str(sid)] = candidate.to_dict()
-            credits_path.write_text(json.dumps(credits, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        # 2ª chance, antes de repetir uma imagem: as buscas das outras cenas (mesmo tema),
+        # da mais próxima para a mais distante, ainda podem ter imagens não usadas.
+        for sid in list(missing):
+            neighbours = sorted((s for s in episode["scenes"] if s["scene_id"] != sid),
+                                key=lambda s: (abs(s["scene_id"] - sid), s["scene_id"] > sid))
+            queries = list(dict.fromkeys(q for s in neighbours for q in scene_queries(s, episode)))
+            if self._save_stock_image(sid, queries, visuals_dir, used, credits):
+                missing.remove(sid)
 
         if not missing:
             return
@@ -459,8 +479,11 @@ class VisualGenerator:
             credits[str(sid)] = {"reused_from_scene": source_sid}
             log.info("Cena %s: sem imagem nova; reaproveitando a da cena %s", sid, source_sid)
         credits_path.write_text(json.dumps(credits, ensure_ascii=False, indent=2), encoding="utf-8")
+        log.warning("%s de %s cenas repetem a imagem de outra cena (faltou imagem livre). "
+                    "Mais opções: PEXELS_API_KEY no .env ou ALLOW_SHARE_ALIKE=1",
+                    len(missing), len(episode["scenes"]))
 
-    def process_episode(self, day: date) -> Path:
+    def process_episode(self, day: date, refresh: bool = False) -> Path:
         folder = self.output_dir / day.isoformat()
         episode_path = folder / "current_episode.json"
         if not episode_path.exists():
@@ -473,6 +496,8 @@ class VisualGenerator:
             raise VisualGeneratorError(f"{episode_path} não tem topic_id (gere de novo com story_engine.py)")
         visuals_dir = self.episodes_dir / str(episode_id) / "visuals"
         visuals_dir.mkdir(parents=True, exist_ok=True)
+        if refresh:
+            clear_episode_visuals(visuals_dir)
         if self.stock is not None:
             self._ensure_stock_images(episode, visuals_dir)
 
@@ -548,6 +573,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="lista os modelos de imagem disponíveis na sua conta Gemini")
     parser.add_argument("--search", metavar="TERMOS",
                         help="testa a busca de imagens grátis (Wikimedia/Pexels) sem baixar nada")
+    parser.add_argument("--refresh", action="store_true",
+                        help="apaga as imagens do episódio e busca (ou gera) de novo")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -569,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
             for name in list_image_models():
                 print(name)
             return 0
-        print(VisualGenerator().process_episode(args.date))
+        print(VisualGenerator().process_episode(args.date, refresh=args.refresh))
     except VisualGeneratorError as exc:
         log.error("%s", exc)
         return 1

@@ -5,7 +5,7 @@
 ```bash
 1. python -m venv .venv && .venv\Scripts\activate        # Mac/Linux: source .venv/bin/activate
 2. pip install -r requirements.txt && python setup_assets.py   # + FFmpeg instalado (ffmpeg -version)
-3. copy .env.example .env      # imagens reais grátis já vêm ligadas (opcional: PEXELS_API_KEY); roteiro: Claude Code logado (padrão) ou chave da API
+3. copy .env.example .env      # imagens reais grátis já vêm ligadas (recomendado: PEXELS_API_KEY, grátis); roteiro: Claude Code logado (padrão) ou chave da API
 4. python main.py --check   &&   python main.py             # testa e gera o 1º vídeo agora
 5. start_scheduler.bat  +  install_autostart_windows.bat    # Mac/Linux: ./start_scheduler.sh && ./install_autostart.sh
 ```
@@ -105,6 +105,7 @@ Só depois disso o tema é gravado no banco como `verified`.
 python visual_generator.py --search "Lake Maracaibo"   # testa a busca de imagens grátis (não baixa nada)
 python visual_generator.py                             # episódio de hoje
 python visual_generator.py --date 2026-11-05
+python visual_generator.py --date 2026-11-05 --refresh # apaga as imagens do episódio e busca de novo
 python visual_generator.py --list-models               # só para IMAGE_PROVIDER=gemini
 ```
 
@@ -124,10 +125,14 @@ No modo `stock`, para cada cena de `current_episode.json`:
    (essa licença pode exigir que o vídeo siga a mesma licença). NC (não comercial), ND (sem
    derivações) e licença desconhecida nunca entram. Imagem com menos de 600 px no lado menor é
    ignorada, e a mesma imagem não se repete no episódio.
-3. Cena sem nenhuma imagem livre reaproveita a da cena mais próxima (o movimento diferente varia
-   o visual). Episódio sem nenhuma imagem para com a explicação do que fazer.
-4. Os créditos ficam em `visuals/credits.json` e entram no `post_copy.txt`, na seção
-   **CRÉDITOS DAS IMAGENS**: cole na descrição do post, porque a licença CC BY exige.
+3. Cena sem resultado tenta, antes de repetir imagem, as buscas das outras cenas do episódio
+   (mesmo tema, da mais próxima para a mais distante). Cada busca roda uma vez só por episódio.
+4. Se ainda faltar, reaproveita a imagem da cena mais próxima (o movimento diferente varia o
+   visual), avisa no log e no `post_copy.txt` quantas cenas repetem imagem. Episódio sem nenhuma
+   imagem para com a explicação do que fazer.
+5. Os créditos ficam em `visuals/credits.json` e entram no `post_copy.txt` separados em
+   **obrigatórios** (CC BY e CC BY-SA: cole na descrição, a licença exige) e **opcionais**
+   (domínio público, CC0 e Pexels: crédito por cortesia).
 
 No modo `gemini`, cada cena usa o `image_prompt` com o **prefixo fixo de estilo** (mesmo
 "diretor de arte" em todas as cenas; troque em `VISUAL_STYLE_PREFIX`) e é gerada em 9:16: 1
@@ -214,6 +219,7 @@ python main.py                          # vídeo de hoje (retoma se já começou
 python main.py --check                  # FFmpeg, chaves, disco e internet
 python main.py --status                 # checkpoint de hoje
 python main.py --mark-published 2026-11-05
+python main.py --date 2026-11-05 --redo-images   # novas imagens e vídeo remontado (roteiro e voz ficam)
 ```
 
 Saída do dia: `output/AAAA-MM-DD_titulo-do-video.mp4` e `output/AAAA-MM-DD/post_copy.txt`

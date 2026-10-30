@@ -179,6 +179,34 @@ class EditorUnitTest(unittest.TestCase):
         self.assertEqual(transition_for(3, "whoosh"), "whip")
         self.assertEqual(transition_for(3, "thunder"), "flash")
 
+    def test_changed_image_renders_a_new_clip_and_drops_the_old_one(self):
+        # --redo-images troca a imagem com a mesma duração: o clipe antigo não pode ser reaproveitado.
+        from unittest import mock
+
+        import video_editor
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work, image = Path(tmp), Path(tmp) / "scene_01.png"
+            image.write_bytes(b"imagem antiga")
+            plan = video_editor.ScenePlan(1, image, work / "a.wav", "slow_ken_burns", "whoosh",
+                                          None, 30, 0.0, [])
+            rendered = []
+
+            def fake_render(img, motion, duration, out, transition=None):
+                rendered.append(out.name)
+                out.write_bytes(b"clip")
+            with mock.patch.object(video_editor.shutil, "which", return_value="ffmpeg"), \
+                    mock.patch.object(video_editor, "render_clip", side_effect=fake_render), \
+                    mock.patch.object(video_editor, "_run"):
+                editor = VideoEditor(output_dir=work, episodes_dir=work, assets_dir=work)
+                editor.render_scenes([plan], work)
+                editor.render_scenes([plan], work)  # mesma imagem: reaproveita
+                image.write_bytes(b"imagem nova")
+                editor.render_scenes([plan], work)  # imagem trocada: refaz
+            self.assertEqual(len(rendered), 2)
+            self.assertNotEqual(rendered[0], rendered[1])
+            self.assertEqual([p.name for p in work.glob("clip_*.mp4")], [rendered[1]])
+
 
 # --------------------------------------------------------------------------- ponta a ponta
 

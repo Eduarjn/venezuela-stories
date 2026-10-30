@@ -67,6 +67,10 @@ def day_dir(day: date) -> Path:
     return output_dir() / day.isoformat()
 
 
+def episodes_dir() -> Path:
+    return PROJECT_DIR / "assets" / "episodes"
+
+
 def checkpoint_path(day: date) -> Path:
     return day_dir(day) / "checkpoint.json"
 
@@ -198,11 +202,19 @@ def slugify_title(title: str, max_len: int = 60) -> str:
     return slug or "video"
 
 
-def build_post_copy(episode: dict, image_credits: list[str] | None = None) -> str:
+@dataclass
+class ImageCredits:
+    required: list[str] = field(default_factory=list)  # CC BY / BY-SA: a licença exige o crédito
+    optional: list[str] = field(default_factory=list)  # domínio público, CC0, Pexels: cortesia
+    reused_scenes: int = 0                              # cenas que repetem a imagem de outra
+
+
+def build_post_copy(episode: dict, credits: ImageCredits | None = None) -> str:
     """Texto pronto para colar na publicação.
 
-    image_credits: créditos das imagens reais (Wikimedia/Pexels), que a licença exige.
+    credits: créditos das imagens reais (Wikimedia/Pexels) do episódio.
     """
+    credits = credits or ImageCredits()
     hashtags = " ".join(h if h.startswith("#") else f"#{h}" for h in episode.get("hashtags", []))
     lines = [
         "=== TÍTULO ===",
@@ -219,15 +231,26 @@ def build_post_copy(episode: dict, image_credits: list[str] | None = None) -> st
     if episode.get("track") == "fact" and episode.get("sources"):
         lines += ["", "=== FONTES (para comentário fixado ou descrição longa) ==="]
         lines += [f"- {s.get('title', '')}: {s['url']}" for s in episode["sources"]]
-    if image_credits:
-        lines += ["", "=== CRÉDITOS DAS IMAGENS (cole na descrição; a licença exige) ==="]
-        lines += [f"- {c}" for c in image_credits]
+    if credits.required:
+        lines += ["", "=== CRÉDITOS DAS IMAGENS (obrigatório: cole na descrição; a licença exige) ==="]
+        lines += [f"- {c}" for c in credits.required]
+    if credits.optional:
+        lines += ["", "=== Créditos opcionais (domínio público / Pexels: não é obrigatório) ==="]
+        lines += [f"- {c}" for c in credits.optional]
     ai_note = ("- A narração é voz sintética e as imagens vêm de acervos livres: ative o rótulo de "
-               "conteúdo gerado/alterado por IA se a plataforma pedir.") if image_credits else (
+               "conteúdo gerado/alterado por IA se a plataforma pedir."
+               ) if credits.required or credits.optional else (
                "- Imagens e voz são geradas por IA: ative o rótulo de conteúdo gerado por IA da plataforma.")
+    warning = []
+    if credits.reused_scenes:
+        warning = [f"- ATENÇÃO: {credits.reused_scenes} de {len(episode.get('scenes') or [])} cenas repetem "
+                   "a imagem de outra cena (faltou imagem livre). Se ficar repetitivo: coloque "
+                   "PEXELS_API_KEY no .env e rode python main.py --date "
+                   f"{episode.get('date', '')} --redo-images"]
     lines += [
         "",
         "=== ANTES DE PUBLICAR ===",
+        *warning,
         ai_note,
         "- Assista ao vídeo inteiro uma vez (fatos, pronúncia de nomes, legenda).",
         f"- Depois de publicar: python main.py --mark-published {episode.get('date', '')}",
@@ -272,21 +295,43 @@ def step_voice(day: date) -> None:
     VoiceEngine().process_episode(day)
 
 
-def load_image_credits(episode: dict) -> list[str]:
-    """Linhas de crédito únicas das imagens reais usadas no episódio (visuals/credits.json)."""
+def load_image_credits(episode: dict) -> ImageCredits:
+    """Créditos únicos das imagens reais usadas no episódio (visuals/credits.json)."""
     from image_sources import Candidate
 
-    path = PROJECT_DIR / "assets" / "episodes" / str(episode.get("topic_id")) / "visuals" / "credits.json"
+    credits = ImageCredits()
+    path = episodes_dir() / str(episode.get("topic_id")) / "visuals" / "credits.json"
     if not path.exists():
-        return []
-    lines: list[str] = []
+        return credits
     for entry in json.loads(path.read_text(encoding="utf-8")).values():
         if "source" not in entry:  # cena que reaproveitou a imagem de outra
+            credits.reused_scenes += 1
             continue
-        line = Candidate(**entry).credit_line()
-        if line not in lines:
-            lines.append(line)
-    return lines
+        candidate = Candidate(**entry)
+        target = credits.required if candidate.attribution_required else credits.optional
+        if candidate.credit_line() not in target:
+            target.append(candidate.credit_line())
+    return credits
+
+
+def redo_images(day: date) -> None:
+    """Apaga as imagens do dia e marca visuals/edit para rodar de novo (roteiro e voz ficam)."""
+    from visual_generator import clear_episode_visuals
+
+    episode_path = day_dir(day) / "current_episode.json"
+    if not episode_path.exists():
+        raise PipelineError(f"{episode_path} não existe: ainda não há episódio em {day}")
+    episode = json.loads(episode_path.read_text(encoding="utf-8"))
+    visuals = episodes_dir() / str(episode.get("topic_id")) / "visuals"
+    if visuals.exists():
+        clear_episode_visuals(visuals)
+    cp = Checkpoint.load(day)
+    for step in ("visuals", "edit"):
+        cp.steps[step] = "pending"
+        cp.attempts[step] = 0
+    cp.final_video = cp.post_copy = cp.finished_at = None
+    cp.save()
+    log.info("Imagens de %s apagadas; visuals e edit vão rodar de novo", day)
 
 
 def step_edit(day: date) -> tuple[Path, Path]:
@@ -420,6 +465,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="só roda o health check")
     parser.add_argument("--status", action="store_true", help="mostra o checkpoint do dia")
     parser.add_argument("--mark-published", type=date.fromisoformat, metavar="AAAA-MM-DD")
+    parser.add_argument("--redo-images", action="store_true",
+                        help="apaga as imagens do dia, busca de novo e remonta o vídeo "
+                             "(o roteiro e a narração são reaproveitados)")
     args = parser.parse_args(argv)
     setup_logging(args.date)
 
@@ -451,6 +499,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         with RunLock():
+            if args.redo_images:
+                redo_images(args.date)
             cp = run_pipeline(args.date)
     except PipelineError as exc:
         log.error("%s", exc)

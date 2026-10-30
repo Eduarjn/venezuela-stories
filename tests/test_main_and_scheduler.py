@@ -144,6 +144,42 @@ class PublishingTest(unittest.TestCase):
         self.assertIn("--mark-published 2026-11-01", text)
 
 
+class RedoImagesTest(unittest.TestCase):
+    def test_clears_images_and_reruns_only_visuals_and_edit(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"OUTPUT_DIR": str(Path(tmp) / "output")}), \
+                mock.patch("main.episodes_dir", return_value=Path(tmp) / "episodes"):
+            main.day_dir(DAY).mkdir(parents=True)
+            (main.day_dir(DAY) / "current_episode.json").write_text(json.dumps({"topic_id": 9, "scenes": []}))
+            visuals = Path(tmp) / "episodes" / "9" / "visuals"
+            visuals.mkdir(parents=True)
+            for name in ("scene_01.png", "scene_01.mp4", "credits.json", "manifest.json"):
+                (visuals / name).write_bytes(b"x")
+            Checkpoint(day=DAY.isoformat(), steps={s: "done" for s in main.STEPS}, final_video="v.mp4").save()
+
+            main.redo_images(DAY)
+            self.assertEqual(list(visuals.iterdir()), [])
+            cp = Checkpoint.load(DAY)
+            self.assertEqual(cp.steps, {"story": "done", "visuals": "pending", "voice": "done", "edit": "pending"})
+            self.assertIsNone(cp.final_video)
+
+            calls = []
+
+            def make(name):
+                def step(day):
+                    calls.append(name)
+                    return (Path("v.mp4"), Path("post_copy.txt")) if name == "edit" else None
+                return step
+            run_pipeline(DAY, steps={n: make(n) for n in main.STEPS}, sleep=lambda s: None,
+                         connectivity=lambda: True, check_health=False)
+            self.assertEqual(calls, ["visuals", "edit"])  # roteiro e narração não são refeitos
+
+    def test_day_without_episode_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"OUTPUT_DIR": tmp}):
+            with self.assertRaises(PipelineError):
+                main.redo_images(DAY)
+
+
 class LockTest(unittest.TestCase):
     def test_second_run_is_blocked_while_first_is_running(self):
         with tempfile.TemporaryDirectory() as tmp:
