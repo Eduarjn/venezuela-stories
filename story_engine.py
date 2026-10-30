@@ -230,6 +230,10 @@ REGRAS DE CONTEÚDO
   para confirmar cada dado (datas, números, nomes) em pelo menos 2 sites de domínios
   diferentes. Se um dado não se confirmar, ele sai do roteiro. Não invente diálogo,
   personagem ou detalhe "para dar cor".
+- Na trilha "fact", história que só aparece em sites de curiosidades, turismo ou
+  divulgação (sem historiador, órgão oficial, enciclopédia ou artigo científico que a
+  confirme) é narrada como tradição: "conta-se que", "segundo a tradição". Ex.: o relâmpago
+  do Catatumbo ter guiado a frota de Padilla em 1823.
 - Trilha "fiction" (só para lendas/folclore): diga explicitamente nas primeiras cenas que é
   uma lenda. Nunca apresente lenda como fato.
 - Temas políticos: narre o que aconteceu e atribua cada versão a quem a defende. Sem

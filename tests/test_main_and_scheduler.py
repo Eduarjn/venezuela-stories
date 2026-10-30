@@ -196,6 +196,28 @@ class RedoImagesTest(unittest.TestCase):
             with self.assertRaises(PipelineError):
                 main.redo_images(DAY, [7])  # cena que não existe
 
+    def test_redo_voice_replaces_only_the_chosen_scene_audio(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"OUTPUT_DIR": str(Path(tmp) / "output")}), \
+                mock.patch("main.episodes_dir", return_value=Path(tmp) / "episodes"):
+            main.day_dir(DAY).mkdir(parents=True)
+            (main.day_dir(DAY) / "current_episode.json").write_text(json.dumps(
+                {"topic_id": 9, "scenes": [{"scene_id": 1}, {"scene_id": 2}]}))
+            audio = Path(tmp) / "episodes" / "9" / "audio"
+            audio.mkdir(parents=True)
+            for sid in (1, 2):
+                for ext in ("wav", "words.json"):
+                    (audio / f"scene_{sid:02d}.{ext}").write_bytes(b"x")
+            Checkpoint(day=DAY.isoformat(), steps={s: "done" for s in main.STEPS}).save()
+
+            main.redo_images(DAY, [2])  # imagens e voz no mesmo comando
+            main.redo_voice(DAY, [2])
+            self.assertEqual(sorted(p.name for p in audio.iterdir()), ["scene_01.wav", "scene_01.words.json"])
+            self.assertEqual(Checkpoint.load(DAY).steps,
+                             {"story": "done", "visuals": "pending", "voice": "pending", "edit": "pending"})
+            with self.assertRaises(PipelineError):
+                main.redo_voice(DAY, [9])
+
     def test_post_copy_is_rebuilt_without_rendering(self):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ, {"OUTPUT_DIR": tmp}), \
