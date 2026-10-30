@@ -120,7 +120,8 @@ No modo `stock`, para cada cena de `current_episode.json`:
 
 1. Busca pela `image_query` que o roteiro escreve (2 a 6 palavras em inglês, ex.: "Lake Maracaibo
    oil derricks"). Sem resultado, tenta os nomes próprios do `image_prompt`, depois a entidade e o
-   título do episódio.
+   título do episódio. Busca com nome próprio vai primeiro ao Wikimedia (o lugar real); busca
+   genérica, toda em minúsculas ("lightning storm at night"), vai primeiro à Pexels, se houver chave.
 2. Só aceita domínio público, CC0, CC BY e licença Pexels. CC BY-SA só com `ALLOW_SHARE_ALIKE=1`
    (essa licença pode exigir que o vídeo siga a mesma licença). NC (não comercial), ND (sem
    derivações) e licença desconhecida nunca entram. Imagem com menos de 600 px no lado menor é
@@ -131,8 +132,11 @@ No modo `stock`, para cada cena de `current_episode.json`:
    visual), avisa no log e no `post_copy.txt` quantas cenas repetem imagem. Episódio sem nenhuma
    imagem para com a explicação do que fazer.
 5. Os créditos ficam em `visuals/credits.json` e entram no `post_copy.txt` separados em
-   **obrigatórios** (CC BY e CC BY-SA: cole na descrição, a licença exige) e **opcionais**
-   (domínio público, CC0 e Pexels: crédito por cortesia).
+   **obrigatórios** (CC BY e CC BY-SA: cole na descrição; já vêm com o link da licença e o aviso
+   de que a imagem foi recortada e animada, que a licença exige) e **opcionais** (domínio
+   público, CC0 e Pexels: crédito por cortesia).
+6. O `post_copy.txt` termina com a **REVISÃO** (não é para colar): a imagem de cada cena ao lado
+   da narração, para ver em segundos se a narração cita um lugar e a imagem é de outro.
 
 No modo `gemini`, cada cena usa o `image_prompt` com o **prefixo fixo de estilo** (mesmo
 "diretor de arte" em todas as cenas; troque em `VISUAL_STYLE_PREFIX`) e é gerada em 9:16: 1
@@ -220,6 +224,7 @@ python main.py --check                  # FFmpeg, chaves, disco e internet
 python main.py --status                 # checkpoint de hoje
 python main.py --mark-published 2026-11-05
 python main.py --date 2026-11-05 --redo-images   # novas imagens e vídeo remontado (roteiro e voz ficam)
+python main.py --date 2026-11-05 --post-copy     # só refaz o post_copy.txt (sem renderizar)
 ```
 
 Saída do dia: `output/AAAA-MM-DD_titulo-do-video.mp4` e `output/AAAA-MM-DD/post_copy.txt`

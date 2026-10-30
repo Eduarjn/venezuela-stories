@@ -63,6 +63,20 @@ class LicenseTest(unittest.TestCase):
         self.assertIsNone(classify_license("", ""))
 
 
+class CreditLineTest(unittest.TestCase):
+    def test_cc_by_credit_links_the_license(self):
+        # CC BY 2.0, 3.0 e 4.0 exigem o link da licença, não só o nome.
+        c = cand("Lake")
+        self.assertIn("CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)", c.credit_line())
+        c.license, c.license_url = "CC BY 2.0", "https://creativecommons.org/licenses/by/2.0"
+        self.assertIn("CC BY 2.0 (https://creativecommons.org/licenses/by/2.0)", c.credit_line())
+
+    def test_public_domain_has_no_license_link_and_repeated_author_is_collapsed(self):
+        c = cand("Map")
+        c.license, c.attribution_required, c.author = "Public domain", False, "Unknown author Unknown author"
+        self.assertEqual(c.credit_line(), 'Imagem: "Map" — Unknown author — Public domain — https://commons/Map')
+
+
 class WikimediaTest(unittest.TestCase):
     def source(self, response, **kw):
         self.requests = []
@@ -145,6 +159,16 @@ class FinderTest(unittest.TestCase):
         found, _ = StockImageFinder([commons], fetch=lambda url: b"x").find(["a", "b"], set())
         self.assertEqual(found.title, "from_b")
         self.assertEqual(commons.queries, ["a", "b"])
+
+    def test_generic_query_tries_the_photo_bank_first(self):
+        commons = FakeSource("wikimedia", {"lightning storm at night": [cand("Denver")],
+                                           "Lake Maracaibo": [cand("Maracaibo")]})
+        pexels = FakeSource("pexels", {"lightning storm at night": [cand("PexelsStorm")],
+                                       "Lake Maracaibo": [cand("PexelsLake")]})
+        pexels.generic = True
+        finder = StockImageFinder([commons, pexels], fetch=lambda url: b"x")
+        self.assertEqual(finder.find(["lightning storm at night"], set())[0].title, "PexelsStorm")
+        self.assertEqual(finder.find(["Lake Maracaibo"], set())[0].title, "Maracaibo")
 
     def test_each_query_is_searched_once_and_failed_downloads_are_not_retried(self):
         commons = FakeSource("wikimedia", {"q": [cand("broken"), cand("ok1"), cand("ok2")]})
@@ -256,7 +280,8 @@ class StockEpisodeTest(unittest.TestCase):
 
 class PostCopyCreditsTest(unittest.TestCase):
     EPISODE = {"post_title": "T", "post_description": "D", "hashtags": ["#v"], "track": "fiction",
-               "date": "2026-11-01", "topic_id": 9, "scenes": [{}, {}, {}]}
+               "date": "2026-11-01", "topic_id": 9,
+               "scenes": [{"scene_id": i, "narration_text": f"Narração da cena {i}."} for i in (1, 2, 3)]}
 
     def test_required_and_optional_credits_are_separated(self):
         import main
@@ -270,16 +295,20 @@ class PostCopyCreditsTest(unittest.TestCase):
                 "1": cand("Lake").to_dict(), "2": pd.to_dict(), "3": {"reused_from_scene": 2}}))
             with mock.patch("main.episodes_dir", return_value=Path(tmp)):
                 credits = main.load_image_credits(self.EPISODE)
-        self.assertEqual(credits.required, ['Imagem: "Lake" — Ana — CC BY 4.0 — https://commons/Lake'])
+        self.assertEqual(credits.required, ['Imagem: "Lake" — Ana — CC BY 4.0 '
+                                            '(https://creativecommons.org/licenses/by/4.0/) — https://commons/Lake'])
         self.assertEqual(len(credits.optional), 1)
         self.assertEqual(credits.reused_scenes, 1)
 
         text = main.build_post_copy(self.EPISODE, credits)
         required = text.index("CRÉDITOS DAS IMAGENS (obrigatório")
-        self.assertLess(required, text.index("Ana — CC BY 4.0"))
+        self.assertLess(required, text.index("recortadas e animadas"))  # a licença exige indicar a mudança
+        self.assertLess(text.index("recortadas e animadas"), text.index("Ana — CC BY 4.0"))
         self.assertLess(text.index("Ana — CC BY 4.0"), text.index("Créditos opcionais"))
         self.assertIn("ATENÇÃO: 1 de 3 cenas repetem", text)
         self.assertIn("--date 2026-11-01 --redo-images", text)
+        self.assertIn("Cena 1: Narração da cena 1. -> Lake (wikimedia)", text)
+        self.assertIn("Cena 3: Narração da cena 3. -> (repete a imagem da cena 2)", text)
 
     def test_no_credits_section_without_real_images(self):
         import main

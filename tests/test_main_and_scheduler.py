@@ -174,6 +174,15 @@ class RedoImagesTest(unittest.TestCase):
                          connectivity=lambda: True, check_health=False)
             self.assertEqual(calls, ["visuals", "edit"])  # roteiro e narração não são refeitos
 
+    def test_post_copy_is_rebuilt_without_rendering(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"OUTPUT_DIR": tmp}), \
+                mock.patch("main.episodes_dir", return_value=Path(tmp) / "episodes"):
+            main.day_dir(DAY).mkdir(parents=True)
+            path = main.write_post_copy(DAY, {"post_title": "Título novo", "topic_id": 9, "scenes": []})
+            self.assertIn("Título novo", path.read_text(encoding="utf-8"))
+            self.assertEqual(path, main.day_dir(DAY) / "post_copy.txt")
+
     def test_day_without_episode_is_an_error(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"OUTPUT_DIR": tmp}):
             with self.assertRaises(PipelineError):

@@ -39,11 +39,22 @@ class Candidate:
     height: int
     attribution_required: bool
 
+    def license_link(self) -> str:
+        """URL da licença: CC BY (2.0, 3.0 e 4.0) exige o link, não só o nome."""
+        if self.license_url:
+            return self.license_url
+        match = re.search(r"cc[ -]by(-sa)?[ -](\d\.\d)", self.license.lower())
+        return f"https://creativecommons.org/licenses/by{match.group(1) or ''}/{match.group(2)}/" if match else ""
+
     def credit_line(self) -> str:
         if self.source == "pexels":
             return f"Foto: {self.author} / Pexels ({self.page_url})"
-        author = self.author or "autor desconhecido"
-        return f"Imagem: \"{self.title}\" — {author} — {self.license} — {self.page_url}"
+        # O Commons às vezes repete o autor ("Unknown author Unknown author").
+        author = re.sub(r"^(.+?) \1$", r"\1", self.author) or "autor desconhecido"
+        license = self.license
+        if self.attribution_required and self.license_link():
+            license += f" ({self.license_link()})"
+        return f"Imagem: \"{self.title}\" — {author} — {license} — {self.page_url}"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -129,6 +140,7 @@ class WikimediaSource:
 
 class PexelsSource:
     name = "pexels"
+    generic = True  # banco de fotos: melhor para buscas genéricas ("lightning storm at night")
     API = "https://api.pexels.com/v1/search"
 
     def __init__(self, api_key: str, get_json: Callable[[str, dict, dict], dict] = _get_json) -> None:
@@ -188,9 +200,16 @@ class StockImageFinder:
                 self._results[key] = []
         return self._results[key]
 
+    def _sources_for(self, query: str) -> list:
+        # Busca sem nome próprio ("lightning storm at night"): banco de fotos primeiro (Pexels:
+        # vertical, sem crédito obrigatório). Com nome próprio ("Lake Maracaibo"): acervo primeiro.
+        if query.islower():
+            return sorted(self.sources, key=lambda s: not getattr(s, "generic", False))
+        return self.sources
+
     def find(self, queries: list[str], used: set[str]) -> tuple[Candidate, bytes] | None:
         for query in queries:
-            for source in self.sources:
+            for source in self._sources_for(query):
                 for candidate in self._search(source, query):
                     if candidate.page_url in used or not candidate.download_url:
                         continue

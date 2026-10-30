@@ -207,6 +207,7 @@ class ImageCredits:
     required: list[str] = field(default_factory=list)  # CC BY / BY-SA: a licença exige o crédito
     optional: list[str] = field(default_factory=list)  # domínio público, CC0, Pexels: cortesia
     reused_scenes: int = 0                              # cenas que repetem a imagem de outra
+    by_scene: dict[int, str] = field(default_factory=dict)  # cena -> imagem, para a revisão
 
 
 def build_post_copy(episode: dict, credits: ImageCredits | None = None) -> str:
@@ -232,7 +233,9 @@ def build_post_copy(episode: dict, credits: ImageCredits | None = None) -> str:
         lines += ["", "=== FONTES (para comentário fixado ou descrição longa) ==="]
         lines += [f"- {s.get('title', '')}: {s['url']}" for s in episode["sources"]]
     if credits.required:
-        lines += ["", "=== CRÉDITOS DAS IMAGENS (obrigatório: cole na descrição; a licença exige) ==="]
+        lines += ["", "=== CRÉDITOS DAS IMAGENS (obrigatório: cole na descrição; a licença exige) ===",
+                  # A licença CC BY exige indicar que houve modificação.
+                  "Imagens de acervos livres, recortadas e animadas para o vídeo; algumas podem ser ilustrativas."]
         lines += [f"- {c}" for c in credits.required]
     if credits.optional:
         lines += ["", "=== Créditos opcionais (domínio público / Pexels: não é obrigatório) ==="]
@@ -255,6 +258,14 @@ def build_post_copy(episode: dict, credits: ImageCredits | None = None) -> str:
         "- Assista ao vídeo inteiro uma vez (fatos, pronúncia de nomes, legenda).",
         f"- Depois de publicar: python main.py --mark-published {episode.get('date', '')}",
     ]
+    if credits.by_scene:
+        lines += ["", "=== REVISÃO: IMAGEM DE CADA CENA (não cole; confira se a narração cita um lugar "
+                      "e a imagem é de outro) ==="]
+        for scene in episode.get("scenes") or []:
+            narration = scene.get("narration_text", "")
+            narration = narration if len(narration) <= 70 else narration[:67] + "..."
+            image = credits.by_scene.get(scene.get("scene_id"), "?")
+            lines.append(f"Cena {scene.get('scene_id')}: {narration} -> {image}")
     return "\n".join(lines) + "\n"
 
 
@@ -303,11 +314,13 @@ def load_image_credits(episode: dict) -> ImageCredits:
     path = episodes_dir() / str(episode.get("topic_id")) / "visuals" / "credits.json"
     if not path.exists():
         return credits
-    for entry in json.loads(path.read_text(encoding="utf-8")).values():
+    for sid, entry in json.loads(path.read_text(encoding="utf-8")).items():
         if "source" not in entry:  # cena que reaproveitou a imagem de outra
             credits.reused_scenes += 1
+            credits.by_scene[int(sid)] = f"(repete a imagem da cena {entry.get('reused_from_scene')})"
             continue
         candidate = Candidate(**entry)
+        credits.by_scene[int(sid)] = f"{candidate.title} ({candidate.source})"
         target = credits.required if candidate.attribution_required else credits.optional
         if candidate.credit_line() not in target:
             target.append(candidate.credit_line())
@@ -334,6 +347,13 @@ def redo_images(day: date) -> None:
     log.info("Imagens de %s apagadas; visuals e edit vão rodar de novo", day)
 
 
+def write_post_copy(day: date, episode: dict) -> Path:
+    post_copy = day_dir(day) / "post_copy.txt"
+    post_copy.write_text(build_post_copy({**episode, "date": day.isoformat()},
+                                         load_image_credits(episode)), encoding="utf-8")
+    return post_copy
+
+
 def step_edit(day: date) -> tuple[Path, Path]:
     from video_editor import VideoEditor, mark_rendered
 
@@ -341,9 +361,7 @@ def step_edit(day: date) -> tuple[Path, Path]:
     episode = json.loads((day_dir(day) / "current_episode.json").read_text(encoding="utf-8"))
     final = output_dir() / f"{day.isoformat()}_{slugify_title(episode['topic_title'])}.mp4"
     shutil.copy2(video, final)
-    post_copy = day_dir(day) / "post_copy.txt"
-    post_copy.write_text(build_post_copy({**episode, "date": day.isoformat()},
-                                         load_image_credits(episode)), encoding="utf-8")
+    post_copy = write_post_copy(day, episode)
     if episode.get("topic_id") is not None:
         mark_rendered(int(episode["topic_id"]), final)
     return final, post_copy
@@ -468,6 +486,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--redo-images", action="store_true",
                         help="apaga as imagens do dia, busca de novo e remonta o vídeo "
                              "(o roteiro e a narração são reaproveitados)")
+    parser.add_argument("--post-copy", action="store_true",
+                        help="só refaz o post_copy.txt do dia (sem renderizar o vídeo)")
     args = parser.parse_args(argv)
     setup_logging(args.date)
 
@@ -483,6 +503,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.status:
         print(json.dumps(Checkpoint.load(args.date).__dict__, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.post_copy:
+        episode_path = day_dir(args.date) / "current_episode.json"
+        if not episode_path.exists():
+            print(f"[X] {episode_path} não existe")
+            return 1
+        print(write_post_copy(args.date, json.loads(episode_path.read_text(encoding="utf-8"))))
         return 0
 
     if args.mark_published:

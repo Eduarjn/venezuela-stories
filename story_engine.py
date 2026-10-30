@@ -252,10 +252,12 @@ ESTRUTURA DE RETENÇÃO
 
 IMAGENS
 - image_query: 2 a 6 palavras em INGLÊS para buscar uma FOTO OU PINTURA REAL num acervo
-  (Wikimedia Commons, Pexels). Use nomes concretos e pesquisáveis: lugar, pessoa histórica,
-  objeto, evento ou paisagem. Ex.: "Lake Maracaibo oil derricks", "Francisco de Miranda
-  portrait", "Angel Falls aerial", "lightning storm over lake". Nada abstrato ("tensão",
-  "mistério"). Cenas vizinhas podem repetir o mesmo assunto com outra busca.
+  (Wikimedia Commons, Pexels). Prefira o lugar, objeto, evento ou pessoa histórica REAL da
+  cena, com o nome próprio em maiúscula: "Lake Maracaibo oil derricks", "Francisco de Miranda
+  portrait", "Angel Falls aerial". Quando a narração cita um lugar, busque esse lugar. Busca
+  genérica só para cena sem lugar específico, e então toda em minúsculas ("lightning storm at
+  night"). Nada abstrato ("tensão", "mistério"). Cenas vizinhas podem repetir o mesmo assunto
+  com outra busca.
 - Pessoas na image_query: só figuras históricas já falecidas (retrato, pintura ou foto de
   época). Nunca busque pessoas vivas nem pessoas comuns pelo nome.
 - image_prompt em INGLÊS, descrevendo exatamente o que aconteceu na cena: enquadramento,
