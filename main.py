@@ -339,8 +339,9 @@ def run_pipeline(
 
 
 def utf8_console() -> None:
-    """No Windows, saída redirecionada (pipe, Claude Code, agendador) usa cp1252 e quebra
-    com ✓/✗. Força UTF-8 e troca o que não der para escrever, em vez de travar."""
+    """No Windows, saída redirecionada (pipe, Claude Code, agendador) usa cp1252.
+    Força UTF-8 e troca o que não der para escrever, em vez de travar. As mensagens
+    também só usam caracteres que existem no cp1252 ([OK]/[X] em vez de símbolos)."""
     for stream in (sys.stdout, sys.stderr):
         if stream is not None and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -381,10 +382,10 @@ def main(argv: list[str] | None = None) -> int:
         problems = health_problems()
         net = internet_ok()
         for p in problems:
-            print(f"✗ {p}")
-        print("✓ internet" if net else "✗ sem conexão com as APIs")
+            print(f"[X] {p}")
+        print("[OK] internet" if net else "[X] sem conexão com as APIs")
         if not problems and net:
-            print("✓ tudo pronto para rodar")
+            print("[OK] tudo pronto para rodar")
         return 0 if not problems and net else 1
 
     if args.status:

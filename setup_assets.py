@@ -140,7 +140,7 @@ def setup(sfx_dir: Path = SFX_DIR, music_dir: Path = MUSIC_DIR, force: bool = Fa
         synth = sfx_dir / f"{cue}{SYNTH_SUFFIX}.wav"
         existing = find_sfx(cue, sfx_dir)
         if existing and existing != synth:
-            print(f"  ✓ {cue:<15} usa {existing.name} (seu arquivo, mantido)")
+            print(f"  [OK] {cue:<15} usa {existing.name} (seu arquivo, mantido)")
             continue
         if synth.exists() and not force:
             continue
@@ -152,7 +152,7 @@ def setup(sfx_dir: Path = SFX_DIR, music_dir: Path = MUSIC_DIR, force: bool = Fa
     synth_music = music_dir / f"tension_drone{SYNTH_SUFFIX}.wav"
     others = [t for t in music_tracks(music_dir) if t != synth_music]
     if others:
-        print(f"  ✓ música: {len(others)} faixa(s) sua(s), drone sintético não é necessário")
+        print(f"  [OK] música: {len(others)} faixa(s) sua(s), drone sintético não é necessário")
     elif force or not synth_music.exists():
         _render(MUSIC_RECIPE.format(d=MUSIC_SECONDS + 1, sr=SAMPLE_RATE), synth_music, MUSIC_SECONDS,
                 loudness=True)
@@ -167,16 +167,17 @@ def report(sfx_dir: Path = SFX_DIR, music_dir: Path = MUSIC_DIR) -> bool:
     for cue in expected_cues():
         found = find_sfx(cue, sfx_dir)
         names = ", ".join(f"{a}.mp3/.wav" for a in SFX_ALIASES[cue])
-        print(f"  {'✓' if found else '✗'} {cue:<15} -> {found.name if found else 'FALTA (' + names + ')'}")
+        print(f"  {'[OK]' if found else '[X]'} {cue:<15} -> {found.name if found else 'FALTA (' + names + ')'}")
         ok &= found is not None
     tracks = music_tracks(music_dir)
-    print("Música:", ", ".join(t.name for t in tracks) if tracks else "✗ nenhuma em assets/music/")
+    print("Música:", ", ".join(t.name for t in tracks) if tracks else "[X] nenhuma em assets/music/")
     return ok and bool(tracks)
 
 
 def utf8_console() -> None:
-    """No Windows, saída redirecionada (pipe, Claude Code, agendador) usa cp1252 e quebra
-    com ✓/✗. Força UTF-8 e troca o que não der para escrever, em vez de travar."""
+    """No Windows, saída redirecionada (pipe, Claude Code, agendador) usa cp1252.
+    Força UTF-8 e troca o que não der para escrever, em vez de travar. As mensagens
+    também só usam caracteres que existem no cp1252 ([OK]/[X] em vez de símbolos)."""
     for stream in (sys.stdout, sys.stderr):
         if stream is not None and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")

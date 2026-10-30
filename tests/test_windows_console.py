@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -24,7 +26,23 @@ class WindowsConsoleTest(unittest.TestCase):
     def test_main_check_does_not_crash(self):
         result = self.run_cli("main.py", "--check")
         self.assertNotIn("UnicodeEncodeError", result.stderr)
-        self.assertTrue("✓ internet" in result.stdout or "sem conexão" in result.stdout, result.stdout)
+        self.assertTrue("[OK] internet" in result.stdout or "sem conexão" in result.stdout, result.stdout)
+
+    def test_functions_called_inside_a_cp1252_process_do_not_crash(self):
+        # Caso real: o unittest chama setup_assets.setup()/report() direto, num processo
+        # cujo stdout é cp1252 (sem passar por main(), onde fica o utf8_console()).
+        sys.path.insert(0, str(ROOT))
+        import setup_assets
+
+        cp1252_stdout = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(cp1252_stdout):
+            sfx, music = Path(tmp) / "sfx", Path(tmp) / "music"
+            sfx.mkdir()
+            (sfx / "impact.mp3").write_bytes(b"x")  # caminho que imprime "usa seu arquivo"
+            setup_assets.setup(sfx, music)
+            setup_assets.report(sfx, music)
+            cp1252_stdout.flush()
+        self.assertIn(b"[OK]", cp1252_stdout.buffer.getvalue())
 
 
 if __name__ == "__main__":
