@@ -46,7 +46,7 @@ STEP_ATTEMPTS = 3
 STEP_BACKOFF_SECONDS = (60, 300)        # espera antes da 2ª e da 3ª tentativa
 HEALTH_WAIT_MINUTES = 30
 MIN_FREE_DISK_GB = 2.0
-LOCK_STALE_HOURS = 6
+RUN_LOCK_PORT = 47622                    # o agendador usa a 47621
 API_HOSTS = ("api.anthropic.com", "generativelanguage.googleapis.com")
 
 log = logging.getLogger("main")
@@ -171,25 +171,32 @@ def wait_for_internet(sleep: Callable[[float], None] = time.sleep,
 
 
 class RunLock:
-    """Impede que o agendador e uma execução manual rodem ao mesmo tempo."""
+    """Impede que o agendador e uma execução manual rodem ao mesmo tempo.
 
-    def __init__(self, path: Path | None = None) -> None:
-        self.path = path or PROJECT_DIR / "logs" / "pipeline.lock"
+    Ocupa uma porta local, como o agendador: o sistema a libera sozinho quando o processo
+    termina, mesmo se ele for morto (falta de energia, timeout do terminal). A trava antiga,
+    em arquivo, ficava presa por horas depois de um processo morto."""
+
+    def __init__(self, port: int = RUN_LOCK_PORT) -> None:
+        self.port = port
+        self.sock: socket.socket | None = None
 
     def __enter__(self) -> "RunLock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
-            age_h = (time.time() - self.path.stat().st_mtime) / 3600
-            if age_h < LOCK_STALE_HOURS:
-                raise PipelineError(
-                    f"outra execução está rodando ({self.path}). Se não estiver, apague o arquivo."
-                )
-            log.warning("Trava antiga (%.0fh) ignorada", age_h)
-        self.path.write_text(f"{os.getpid()} {datetime.now().isoformat()}", encoding="utf-8")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("127.0.0.1", self.port))
+        except OSError:
+            sock.close()
+            raise PipelineError(f"outra execução do pipeline está rodando agora (porta local "
+                                f"{self.port} ocupada); espere ela terminar") from None
+        self.sock = sock
+        (PROJECT_DIR / "logs" / "pipeline.lock").unlink(missing_ok=True)  # trava antiga, em arquivo
         return self
 
     def __exit__(self, *exc) -> None:
-        self.path.unlink(missing_ok=True)
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
 
 
 # --------------------------------------------------------------------------- publicação

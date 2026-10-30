@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -251,13 +252,29 @@ class RedoImagesTest(unittest.TestCase):
 
 class LockTest(unittest.TestCase):
     def test_second_run_is_blocked_while_first_is_running(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "pipeline.lock"
-            with RunLock(path):
-                with self.assertRaises(PipelineError):
-                    with RunLock(path):
-                        pass
-            self.assertFalse(path.exists())
+        with RunLock(port=47998):
+            with self.assertRaises(PipelineError):
+                with RunLock(port=47998):
+                    pass
+        with RunLock(port=47998):  # liberada ao sair
+            pass
+
+    def test_lock_is_released_when_the_process_is_killed(self):
+        # Caso real: o terminal mata o pipeline no meio (timeout); a trava não pode ficar presa.
+        root = str(Path(__file__).resolve().parent.parent)
+        code = (f"import sys, time; sys.path.insert(0, {root!r}); import main; "
+                "lock = main.RunLock(port=47997).__enter__(); print('ok', flush=True); time.sleep(60)")
+        proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(proc.stdout.readline().strip(), "ok")
+            with self.assertRaises(PipelineError):
+                RunLock(port=47997).__enter__()
+        finally:
+            proc.kill()
+            proc.wait()
+            proc.stdout.close()
+        with RunLock(port=47997):
+            pass
 
 
 class SchedulerTest(unittest.TestCase):
