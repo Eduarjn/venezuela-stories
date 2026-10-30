@@ -81,8 +81,23 @@ class ClaudeCodeBackendTest(unittest.TestCase):
         with self.assertRaisesRegex(StoryEngineError, "/login"):
             backend.ask([{"role": "user", "content": "P"}], SearchEvidence())
 
+    def test_claude_bin_from_env_wins(self):
+        from story_engine import find_claude_binary
+
+        with mock.patch.dict(os.environ, {"CLAUDE_BIN": r"C:\x\claude.exe"}):
+            self.assertEqual(find_claude_binary(), r"C:\x\claude.exe")
+
+    def test_windows_prefers_native_exe_over_npm_shim(self):
+        from story_engine import find_claude_binary
+
+        found = {"claude.exe": r"C:\bin\claude.exe", "claude": r"C:\npm\claude.cmd"}
+        with mock.patch.dict(os.environ, {"CLAUDE_BIN": ""}), mock.patch("os.name", "nt"), \
+                mock.patch("shutil.which", side_effect=found.get):
+            self.assertEqual(find_claude_binary(), r"C:\bin\claude.exe")
+
     def test_missing_claude_binary(self):
-        with mock.patch("shutil.which", return_value=None):
+        with mock.patch.dict(os.environ, {"CLAUDE_BIN": ""}), mock.patch("shutil.which", return_value=None), \
+                mock.patch("pathlib.Path.exists", return_value=False):
             with self.assertRaisesRegex(StoryEngineError, "install"):
                 ClaudeCodeBackend()
 

@@ -512,6 +512,25 @@ Ferramentas disponíveis aqui: WebSearch (pesquisa) e WebFetch (abrir uma págin
 para confirmar os fatos. Não há outras ferramentas. A resposta final deve ser só o JSON."""
 
 
+def find_claude_binary() -> str | None:
+    """Caminho do Claude Code. CLAUDE_BIN no .env tem prioridade.
+
+    No Windows prefere o claude.exe nativo: o atalho claude.cmd do npm passa pelo
+    cmd.exe, que pode estragar acentos e aspas dos argumentos.
+    """
+    configured = os.getenv("CLAUDE_BIN", "").strip()
+    if configured:
+        return configured
+    if os.name == "nt":
+        found = shutil.which("claude.exe")
+        if found:
+            return found
+        native = Path.home() / ".local" / "bin" / "claude.exe"  # instalador nativo
+        if native.exists():
+            return str(native)
+    return shutil.which("claude")
+
+
 class ClaudeCodeBackend:
     """Roda o Claude Code deste PC (`claude -p`), já logado na sua conta.
 
@@ -523,7 +542,7 @@ class ClaudeCodeBackend:
 
     def __init__(self, model: str | None = None, runner=subprocess.run,
                  claude_bin: str | None = None) -> None:
-        self.bin = claude_bin or shutil.which("claude")
+        self.bin = claude_bin or find_claude_binary()
         if not self.bin:
             raise StoryEngineError(
                 "Claude Code não encontrado. Instale (irm https://claude.ai/install.ps1 | iex), "
