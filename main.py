@@ -123,7 +123,19 @@ def health_problems() -> list[str]:
     for tool in ("ffmpeg", "ffprobe"):
         if shutil.which(tool) is None:
             problems.append(f"{tool} não encontrado (instale o FFmpeg)")
-    required = ["ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "GEMINI_API_KEY", "GEMINI_IMAGE_MODEL"]
+    from story_engine import StoryEngineError, resolve_backend
+
+    required = ["GEMINI_API_KEY", "GEMINI_IMAGE_MODEL"]
+    try:
+        backend = resolve_backend()
+    except StoryEngineError as exc:
+        problems.append(str(exc))
+        backend = None
+    if backend == "api":
+        required = ["ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", *required]
+    elif backend == "claude_code" and shutil.which("claude") is None:
+        problems.append("Claude Code (claude) não encontrado no PATH "
+                        "(ANTHROPIC_BACKEND=claude_code usa o Claude Code logado neste PC)")
     provider = (os.getenv("TTS_PROVIDER") or "edge").lower()
     if provider == "elevenlabs":
         required += ["ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"]

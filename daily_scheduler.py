@@ -72,6 +72,21 @@ def should_run(now: datetime, scheduled: dtime, state: dict,
     return now - datetime.fromisoformat(last) >= timedelta(minutes=retry_minutes)
 
 
+def pipeline_python() -> tuple[str, int]:
+    """Python e flags para rodar main.py.
+
+    No Windows o agendador roda em pythonw (sem janela), mas cada FFmpeg/claude que um
+    processo sem console abre ganha uma janela própria piscando na tela. Por isso o
+    pipeline roda em python.exe com um console oculto (CREATE_NO_WINDOW), que os
+    processos filhos herdam.
+    """
+    exe = Path(sys.executable)
+    if os.name != "nt":
+        return str(exe), 0
+    console = exe.with_name("python.exe")
+    return str(console if console.exists() else exe), subprocess.CREATE_NO_WINDOW
+
+
 def run_once(now: datetime | None = None) -> dict:
     now = now or datetime.now()
     retry = int(os.getenv("RETRY_MINUTES") or 30)
@@ -89,9 +104,10 @@ def run_once(now: datetime | None = None) -> dict:
 
     log.info("Iniciando vídeo de %s (execução %s/%s)", today, state["runs"], max_runs)
     try:
+        python, flags = pipeline_python()
         result = subprocess.run(
-            [sys.executable, str(PROJECT_DIR / "main.py"), "--date", today],
-            cwd=PROJECT_DIR, timeout=RUN_TIMEOUT_SECONDS,
+            [python, str(PROJECT_DIR / "main.py"), "--date", today],
+            cwd=PROJECT_DIR, timeout=RUN_TIMEOUT_SECONDS, creationflags=flags,
         )
         state["done"] = result.returncode == 0
         state["last_exit_code"] = result.returncode

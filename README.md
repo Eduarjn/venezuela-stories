@@ -5,7 +5,7 @@
 ```bash
 1. python -m venv .venv && .venv\Scripts\activate        # Mac/Linux: source .venv/bin/activate
 2. pip install -r requirements.txt && python setup_assets.py   # + FFmpeg instalado (ffmpeg -version)
-3. copy .env.example .env      # Mac/Linux: cp — preencha ANTHROPIC_API_KEY, ANTHROPIC_MODEL, GEMINI_API_KEY e GEMINI_IMAGE_MODEL (--list-models)
+3. copy .env.example .env      # preencha GEMINI_API_KEY e GEMINI_IMAGE_MODEL (--list-models); roteiro: Claude Code logado (padrão) ou chave da API
 4. python main.py --check   &&   python main.py             # testa e gera o 1º vídeo agora
 5. start_scheduler.bat  +  install_autostart_windows.bat    # Mac/Linux: ./start_scheduler.sh && ./install_autostart.sh
 ```
@@ -62,6 +62,18 @@ python -m unittest discover -s tests -v                   # testes
 ```
 
 ## Gerar o roteiro do dia (`story_engine.py`)
+
+Quem escreve o roteiro (`ANTHROPIC_BACKEND` no `.env`):
+
+| Valor | Cobrança | Precisa de |
+|---|---|---|
+| `claude_code` (padrão) | sua assinatura Pro/Max | Claude Code instalado e logado neste PC (`claude` → `/login` uma vez) |
+| `api` | créditos da API no console da Anthropic | `ANTHROPIC_API_KEY` e `ANTHROPIC_MODEL` |
+
+No modo `claude_code`, o projeto roda o binário oficial (`claude -p`) com o login dele; nunca lê
+nem guarda o token. Só as ferramentas WebSearch e WebFetch ficam liberadas (todo o resto é
+negado), e as correções do validador continuam a mesma conversa. Se o login expirar, o log diz
+para rodar `claude` e `/login`.
 
 ```bash
 python story_engine.py                                     # hoje, primeiro idioma de VIDEO_LANGUAGES

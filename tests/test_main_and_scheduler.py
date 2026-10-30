@@ -94,11 +94,19 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(self.calls, ["story"])
 
     def test_health_check_lists_missing_keys(self):
-        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "", "TTS_PROVIDER": "elevenlabs",
-                                          "ELEVENLABS_API_KEY": ""}):
+        with mock.patch.dict(os.environ, {"ANTHROPIC_BACKEND": "api", "ANTHROPIC_API_KEY": "",
+                                          "TTS_PROVIDER": "elevenlabs", "ELEVENLABS_API_KEY": ""}):
             problems = main.health_problems()
         self.assertTrue(any("ANTHROPIC_API_KEY" in p for p in problems))
         self.assertTrue(any("ELEVENLABS_API_KEY" in p for p in problems))
+
+    def test_claude_code_backend_needs_no_api_key_but_needs_claude(self):
+        env = {"ANTHROPIC_BACKEND": "claude_code", "ANTHROPIC_API_KEY": "", "ANTHROPIC_MODEL": ""}
+        with mock.patch.dict(os.environ, env), mock.patch("shutil.which",
+                                                         side_effect=lambda t: None if t == "claude" else "/x"):
+            problems = main.health_problems()
+        self.assertFalse(any("ANTHROPIC_API_KEY" in p or "ANTHROPIC_MODEL" in p for p in problems), problems)
+        self.assertTrue(any("Claude Code" in p for p in problems), problems)
 
 
 class PublishingTest(unittest.TestCase):
@@ -152,6 +160,12 @@ class SchedulerTest(unittest.TestCase):
         self.assertFalse(self.decide(datetime(2026, 11, 1, 8, 20), state))
         self.assertTrue(self.decide(datetime(2026, 11, 1, 8, 31), state))
         self.assertFalse(self.decide(datetime(2026, 11, 1, 12, 0), {**state, "runs": 4}))
+
+    def test_pipeline_runs_without_extra_flags_outside_windows(self):
+        if os.name == "nt":
+            self.skipTest("só fora do Windows")
+        python, flags = daily_scheduler.pipeline_python()
+        self.assertEqual((python, flags), (sys.executable, 0))
 
     def test_single_instance_lock(self):
         port = 47999

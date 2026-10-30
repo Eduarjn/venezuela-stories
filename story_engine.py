@@ -23,7 +23,10 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -489,6 +492,106 @@ def extract_json(text: str) -> dict:
     return json.loads(candidate[start : end + 1])
 
 
+def resolve_backend() -> str:
+    """Quem escreve o roteiro: "api" (chave da API, cobrada no console da Anthropic) ou
+    "claude_code" (o Claude Code instalado e logado neste PC, usando a sua assinatura).
+    Sem ANTHROPIC_BACKEND: usa a API se houver ANTHROPIC_API_KEY, senão o Claude Code."""
+    backend = (os.getenv("ANTHROPIC_BACKEND") or "").strip().lower()
+    if not backend:
+        backend = "api" if os.getenv("ANTHROPIC_API_KEY") else "claude_code"
+    if backend not in ("api", "claude_code"):
+        raise StoryEngineError(f"ANTHROPIC_BACKEND inválido: {backend!r} (use api ou claude_code)")
+    return backend
+
+
+_URL_RE = re.compile(r"https?://[^\s\"'<>)\]]+")
+CLAUDE_CODE_TIMEOUT_SECONDS = 900
+CLAUDE_CODE_NOTE = """
+
+Ferramentas disponíveis aqui: WebSearch (pesquisa) e WebFetch (abrir uma página). Use as duas
+para confirmar os fatos. Não há outras ferramentas. A resposta final deve ser só o JSON."""
+
+
+class ClaudeCodeBackend:
+    """Roda o Claude Code deste PC (`claude -p`), já logado na sua conta.
+
+    Usa o binário oficial com o login dele; o projeto nunca lê nem guarda o token.
+    Só WebSearch e WebFetch ficam liberados; qualquer outra ferramenta é negada
+    (--permission-mode dontAsk). Correções do validador continuam a mesma conversa
+    (--resume), e as URLs devolvidas pela pesquisa entram como evidência.
+    """
+
+    def __init__(self, model: str | None = None, runner=subprocess.run,
+                 claude_bin: str | None = None) -> None:
+        self.bin = claude_bin or shutil.which("claude")
+        if not self.bin:
+            raise StoryEngineError(
+                "Claude Code não encontrado. Instale (irm https://claude.ai/install.ps1 | iex), "
+                "rode 'claude' uma vez para fazer login, ou use ANTHROPIC_BACKEND=api"
+            )
+        self.model = model
+        self.runner = runner
+        self.session_id: str | None = None
+
+    def ask(self, messages: list[dict], evidence: SearchEvidence) -> str:
+        if len(messages) == 1:
+            self.session_id = None  # nova conversa
+        prompt = messages[-1]["content"]
+        with tempfile.TemporaryDirectory() as tmp:
+            system_file = Path(tmp) / "system.txt"
+            system_file.write_text(SYSTEM_PROMPT + CLAUDE_CODE_NOTE, encoding="utf-8")
+            cmd = [self.bin, "-p", "Siga as instruções recebidas pela entrada padrão.",
+                   "--output-format", "stream-json", "--verbose",
+                   "--append-system-prompt-file", str(system_file),
+                   "--allowedTools", "WebSearch,WebFetch",
+                   "--permission-mode", "dontAsk"]
+            if self.model:
+                cmd += ["--model", self.model]
+            if self.session_id:
+                cmd += ["--resume", self.session_id]
+            try:
+                # cwd vazio: o Claude Code não carrega CLAUDE.md/hooks de outra pasta.
+                proc = self.runner(cmd, input=prompt, capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace", cwd=tmp,
+                                   timeout=CLAUDE_CODE_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired as exc:
+                raise ValueError("o Claude Code passou do tempo limite; tente de novo") from exc
+
+        final = None
+        for line in proc.stdout.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("session_id"):
+                self.session_id = event["session_id"]
+            if event.get("type") == "result":
+                final = event
+            elif event.get("type") == "user":
+                for block in (event.get("message") or {}).get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        content = block.get("content")
+                        text = content if isinstance(content, str) else " ".join(
+                            c.get("text", "") for c in content or [] if isinstance(c, dict))
+                        for url in _URL_RE.findall(text):
+                            evidence.result_urls.add(canonical_url(url.rstrip(".,;")))
+
+        if final is None:
+            raise StoryEngineError(
+                f"o Claude Code não respondeu (código {proc.returncode}): {proc.stderr.strip()[-400:]}")
+        if final.get("is_error"):
+            message = str(final.get("result") or final.get("subtype") or "erro")
+            if any(k in message.lower() for k in ("login", "401", "oauth", "authenticat")):
+                raise StoryEngineError(
+                    f"o Claude Code não está logado ({message}). Abra um terminal, rode 'claude' "
+                    "e faça /login; depois rode de novo")
+            raise StoryEngineError(f"o Claude Code falhou: {message}")
+        return str(final.get("result") or "")
+
+
 class StoryEngine:
     def __init__(
         self,
@@ -497,9 +600,17 @@ class StoryEngine:
         model: str | None = None,
         fetcher: Callable[[str], str] = fetch_url,
         output_dir: Path | None = None,
+        backend: ClaudeCodeBackend | None = None,
     ) -> None:
         self.db = db
+        self.fetcher = fetcher
+        self.output_dir = output_dir or PROJECT_DIR / os.getenv("OUTPUT_DIR", "output")
         self.model = model or os.getenv("ANTHROPIC_MODEL")
+        self.backend = backend
+        if backend is None and client is None and resolve_backend() == "claude_code":
+            self.backend = ClaudeCodeBackend(self.model or None)
+        if self.backend is not None:
+            return
         if not self.model:
             raise StoryEngineError("Defina ANTHROPIC_MODEL no .env")
         if client is None:
@@ -510,8 +621,6 @@ class StoryEngine:
             # O SDK já repete sozinho erros de rede, 429 e 5xx com backoff.
             client = anthropic.Anthropic(max_retries=4, timeout=300)
         self.client = client
-        self.fetcher = fetcher
-        self.output_dir = output_dir or PROJECT_DIR / os.getenv("OUTPUT_DIR", "output")
 
     # -- chamada ao modelo --------------------------------------------------
 
@@ -522,6 +631,8 @@ class StoryEngine:
         verificação das fontes. Buscas longas podem pausar (stop_reason ==
         "pause_turn"); nesse caso a conversa continua de onde parou.
         """
+        if self.backend is not None:
+            return self.backend.ask(messages, evidence)
         messages = list(messages)
         for _ in range(MAX_PAUSE_CONTINUATIONS + 1):
             response = self.client.messages.create(
