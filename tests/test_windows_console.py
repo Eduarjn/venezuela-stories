@@ -44,6 +44,30 @@ class WindowsConsoleTest(unittest.TestCase):
             cp1252_stdout.flush()
         self.assertIn(b"[OK]", cp1252_stdout.buffer.getvalue())
 
+    def test_image_search_with_foreign_titles_does_not_crash(self):
+        # Títulos do Wikimedia Commons podem ter caracteres que o cp1252 não tem.
+        sys.path.insert(0, str(ROOT))
+        from unittest import mock
+
+        import image_sources
+        import visual_generator
+
+        class Source:
+            name = "wikimedia"
+
+            def search(self, query):
+                return [image_sources.Candidate("wikimedia", "https://img/x.jpg", "https://commons/x",
+                                                "Maracaibo 湖 Ōkami", "Ana", "CC BY 4.0", "",
+                                                2000, 1300, True)]
+
+        cp1252_stdout = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+        with mock.patch.object(image_sources, "sources_from_env", return_value=[Source()]), \
+                mock.patch("logging.basicConfig"), contextlib.redirect_stdout(cp1252_stdout):
+            code = visual_generator.main(["--search", "Lake Maracaibo"])
+            cp1252_stdout.flush()
+        self.assertEqual(code, 0)
+        self.assertIn(b"[OK] wikimedia: 1", cp1252_stdout.buffer.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

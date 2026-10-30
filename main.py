@@ -125,7 +125,10 @@ def health_problems() -> list[str]:
             problems.append(f"{tool} não encontrado (instale o FFmpeg)")
     from story_engine import StoryEngineError, find_claude_binary, resolve_backend
 
-    required = ["GEMINI_API_KEY", "GEMINI_IMAGE_MODEL"]
+    # Imagens: "stock" (padrão, grátis) não precisa de chave; "gemini" (pago) precisa.
+    required = []
+    if (os.getenv("IMAGE_PROVIDER") or "stock").strip().lower() == "gemini":
+        required = ["GEMINI_API_KEY", "GEMINI_IMAGE_MODEL"]
     try:
         backend = resolve_backend()
     except StoryEngineError as exc:
@@ -195,8 +198,11 @@ def slugify_title(title: str, max_len: int = 60) -> str:
     return slug or "video"
 
 
-def build_post_copy(episode: dict) -> str:
-    """Texto pronto para colar na publicação."""
+def build_post_copy(episode: dict, image_credits: list[str] | None = None) -> str:
+    """Texto pronto para colar na publicação.
+
+    image_credits: créditos das imagens reais (Wikimedia/Pexels), que a licença exige.
+    """
     hashtags = " ".join(h if h.startswith("#") else f"#{h}" for h in episode.get("hashtags", []))
     lines = [
         "=== TÍTULO ===",
@@ -213,10 +219,16 @@ def build_post_copy(episode: dict) -> str:
     if episode.get("track") == "fact" and episode.get("sources"):
         lines += ["", "=== FONTES (para comentário fixado ou descrição longa) ==="]
         lines += [f"- {s.get('title', '')}: {s['url']}" for s in episode["sources"]]
+    if image_credits:
+        lines += ["", "=== CRÉDITOS DAS IMAGENS (cole na descrição; a licença exige) ==="]
+        lines += [f"- {c}" for c in image_credits]
+    ai_note = ("- A narração é voz sintética e as imagens vêm de acervos livres: ative o rótulo de "
+               "conteúdo gerado/alterado por IA se a plataforma pedir.") if image_credits else (
+               "- Imagens e voz são geradas por IA: ative o rótulo de conteúdo gerado por IA da plataforma.")
     lines += [
         "",
         "=== ANTES DE PUBLICAR ===",
-        "- Imagens e voz são geradas por IA: ative o rótulo de conteúdo gerado por IA da plataforma.",
+        ai_note,
         "- Assista ao vídeo inteiro uma vez (fatos, pronúncia de nomes, legenda).",
         f"- Depois de publicar: python main.py --mark-published {episode.get('date', '')}",
     ]
@@ -260,6 +272,23 @@ def step_voice(day: date) -> None:
     VoiceEngine().process_episode(day)
 
 
+def load_image_credits(episode: dict) -> list[str]:
+    """Linhas de crédito únicas das imagens reais usadas no episódio (visuals/credits.json)."""
+    from image_sources import Candidate
+
+    path = PROJECT_DIR / "assets" / "episodes" / str(episode.get("topic_id")) / "visuals" / "credits.json"
+    if not path.exists():
+        return []
+    lines: list[str] = []
+    for entry in json.loads(path.read_text(encoding="utf-8")).values():
+        if "source" not in entry:  # cena que reaproveitou a imagem de outra
+            continue
+        line = Candidate(**entry).credit_line()
+        if line not in lines:
+            lines.append(line)
+    return lines
+
+
 def step_edit(day: date) -> tuple[Path, Path]:
     from video_editor import VideoEditor, mark_rendered
 
@@ -268,7 +297,8 @@ def step_edit(day: date) -> tuple[Path, Path]:
     final = output_dir() / f"{day.isoformat()}_{slugify_title(episode['topic_title'])}.mp4"
     shutil.copy2(video, final)
     post_copy = day_dir(day) / "post_copy.txt"
-    post_copy.write_text(build_post_copy({**episode, "date": day.isoformat()}), encoding="utf-8")
+    post_copy.write_text(build_post_copy({**episode, "date": day.isoformat()},
+                                         load_image_credits(episode)), encoding="utf-8")
     if episode.get("topic_id") is not None:
         mark_rendered(int(episode["topic_id"]), final)
     return final, post_copy

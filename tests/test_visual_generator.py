@@ -213,7 +213,7 @@ class VisualGeneratorTest(unittest.TestCase):
         import os
         from unittest import mock
 
-        with mock.patch.dict(os.environ, {"GEMINI_IMAGE_MODEL": ""}):
+        with mock.patch.dict(os.environ, {"GEMINI_IMAGE_MODEL": "", "IMAGE_PROVIDER": "gemini"}):
             with self.assertRaisesRegex(VisualGeneratorError, "--list-models"):
                 VisualGenerator(output_dir=self.out)
 

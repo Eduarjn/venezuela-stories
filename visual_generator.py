@@ -213,13 +213,35 @@ def estimate_duration(narration: str) -> float:
 # --------------------------------------------------------------------------- imagem
 
 
+# Acima desta proporção (largura/altura) a imagem não é cortada: vai inteira sobre um
+# fundo desfocado dela mesma, o padrão dos vídeos verticais com fotos horizontais.
+CROP_MAX_RATIO = 0.75
+
+
 def fit_vertical(image_bytes: bytes, width: int = WIDTH, height: int = HEIGHT) -> "Image.Image":
-    """Corta no centro para 9:16 e redimensiona para width x height."""
-    from PIL import Image, ImageOps
+    """Ajusta qualquer imagem para width x height (9:16).
+
+    Quase vertical: corta no centro. Horizontal/quadrada (fotos históricas, pinturas):
+    imagem inteira no terço superior-central, sobre a própria imagem desfocada e escurecida,
+    deixando a faixa das legendas (altura dos olhos) sobre o fundo.
+    """
+    from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
     with Image.open(BytesIO(image_bytes)) as img:
         img = img.convert("RGB")
-        return ImageOps.fit(img, (width, height), method=Image.LANCZOS, centering=(0.5, 0.5))
+        if img.width / img.height <= CROP_MAX_RATIO:
+            return ImageOps.fit(img, (width, height), method=Image.LANCZOS, centering=(0.5, 0.5))
+        background = ImageOps.fit(img, (width, height), method=Image.LANCZOS)
+        background = background.filter(ImageFilter.GaussianBlur(36))
+        background = ImageEnhance.Brightness(background).enhance(0.55)
+        fg_w, fg_h = width, round(img.height * width / img.width)
+        max_h = int(height * 0.62)
+        if fg_h > max_h:
+            fg_w, fg_h = round(img.width * max_h / img.height), max_h
+        foreground = img.resize((fg_w, fg_h), Image.LANCZOS)
+        top = max(0, int(height * 0.40 - fg_h / 2))
+        background.paste(foreground, ((width - fg_w) // 2, top))
+        return background
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -311,6 +333,14 @@ class SceneVisual:
     duration: float
 
 
+def resolve_image_provider() -> str:
+    """stock = imagens reais grátis (Wikimedia/Pexels); gemini = imagens geradas (pago)."""
+    provider = (os.getenv("IMAGE_PROVIDER") or "stock").strip().lower()
+    if provider not in ("stock", "gemini"):
+        raise VisualGeneratorError(f"IMAGE_PROVIDER inválido: {provider!r} (use stock ou gemini)")
+    return provider
+
+
 class VisualGenerator:
     def __init__(
         self,
@@ -319,7 +349,19 @@ class VisualGenerator:
         episodes_dir: Path | None = None,
         sleep: Callable[[float], None] = time.sleep,
         render: Callable[[Path, str, float, Path], Path] = render_clip,
+        stock_finder=None,
     ) -> None:
+        self.output_dir = output_dir or PROJECT_DIR / os.getenv("OUTPUT_DIR", "output")
+        self.episodes_dir = episodes_dir or PROJECT_DIR / "assets" / "episodes"
+        self.sleep = sleep
+        self.render = render
+        self.stock = None
+        self.image_client = None
+        if stock_finder is not None or (image_client is None and resolve_image_provider() == "stock"):
+            from image_sources import StockImageFinder, sources_from_env
+
+            self.stock = stock_finder or StockImageFinder(sources_from_env())
+            return
         if image_client is None:
             model = os.getenv("GEMINI_IMAGE_MODEL")
             if not model:
@@ -329,10 +371,6 @@ class VisualGenerator:
                 )
             image_client = GeminiImageClient(model)
         self.image_client = image_client
-        self.output_dir = output_dir or PROJECT_DIR / os.getenv("OUTPUT_DIR", "output")
-        self.episodes_dir = episodes_dir or PROJECT_DIR / "assets" / "episodes"
-        self.sleep = sleep
-        self.render = render
 
     def generate_image(self, prompt: str, path: Path) -> Path:
         """Gera e salva a imagem: 1 tentativa + até 3 novas, com backoff de 2, 4 e 8 s."""
@@ -376,6 +414,52 @@ class VisualGenerator:
             f"{path.name}: falhou após {MAX_IMAGE_ATTEMPTS} tentativas ({last_error})"
         ) from last_error
 
+    def _ensure_stock_images(self, episode: dict, visuals_dir: Path) -> None:
+        """Baixa uma imagem real para cada cena; sem resultado, reaproveita a mais próxima."""
+        from image_sources import scene_queries
+
+        credits_path = visuals_dir / "credits.json"
+        credits: dict = json.loads(credits_path.read_text(encoding="utf-8")) if credits_path.exists() else {}
+        used = {c["page_url"] for c in credits.values() if c.get("page_url")}
+        missing = []
+        for scene in episode["scenes"]:
+            sid = scene["scene_id"]
+            path = visuals_dir / f"scene_{sid:02d}.png"
+            if path.exists():
+                continue
+            found = self.stock.find(scene_queries(scene, episode), used)
+            if found is None:
+                missing.append(sid)
+                continue
+            candidate, data = found
+            try:
+                fit_vertical(data).save(path, "PNG")
+            except Exception as exc:  # arquivo corrompido ou formato estranho
+                log.warning("Cena %s: imagem inválida (%s)", sid, exc)
+                missing.append(sid)
+                continue
+            used.add(candidate.page_url)
+            credits[str(sid)] = candidate.to_dict()
+            credits_path.write_text(json.dumps(credits, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        if not missing:
+            return
+        available = sorted(int(p.stem.split("_")[1]) for p in visuals_dir.glob("scene_*.png"))
+        if not available:
+            raise VisualGeneratorError(
+                "Nenhuma imagem livre encontrada para este episódio. Opções: coloque uma chave "
+                "grátis da Pexels em PEXELS_API_KEY (pexels.com/api), ative ALLOW_SHARE_ALIKE=1 "
+                "ou use IMAGE_PROVIDER=gemini (pago)."
+            )
+        for sid in missing:
+            # A cena mais próxima (de preferência a anterior); o movimento diferente varia o visual.
+            source_sid = min(available, key=lambda other: (abs(other - sid), other > sid))
+            shutil.copyfile(visuals_dir / f"scene_{source_sid:02d}.png",
+                            visuals_dir / f"scene_{sid:02d}.png")
+            credits[str(sid)] = {"reused_from_scene": source_sid}
+            log.info("Cena %s: sem imagem nova; reaproveitando a da cena %s", sid, source_sid)
+        credits_path.write_text(json.dumps(credits, ensure_ascii=False, indent=2), encoding="utf-8")
+
     def process_episode(self, day: date) -> Path:
         folder = self.output_dir / day.isoformat()
         episode_path = folder / "current_episode.json"
@@ -389,6 +473,8 @@ class VisualGenerator:
             raise VisualGeneratorError(f"{episode_path} não tem topic_id (gere de novo com story_engine.py)")
         visuals_dir = self.episodes_dir / str(episode_id) / "visuals"
         visuals_dir.mkdir(parents=True, exist_ok=True)
+        if self.stock is not None:
+            self._ensure_stock_images(episode, visuals_dir)
 
         results: list[SceneVisual] = []
         for scene in episode["scenes"]:
@@ -415,6 +501,7 @@ class VisualGenerator:
             "episode_id": episode_id,
             "date": day.isoformat(),
             "episode_json": str(episode_path),
+            "image_provider": "stock" if self.stock is not None else "gemini",
             "resolution": f"{WIDTH}x{HEIGHT}",
             "fps": FPS,
             "durations_are_estimates": True,
@@ -438,7 +525,16 @@ def list_image_models() -> list[str]:
     return sorted(names)
 
 
+def utf8_console() -> None:
+    """No Windows, saída redirecionada usa cp1252; títulos do Wikimedia podem ter
+    caracteres que não existem nele. Força UTF-8 e troca o resto, em vez de travar."""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    utf8_console()
     try:
         from dotenv import load_dotenv
 
@@ -450,10 +546,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", type=date.fromisoformat, default=date.today())
     parser.add_argument("--list-models", action="store_true",
                         help="lista os modelos de imagem disponíveis na sua conta Gemini")
+    parser.add_argument("--search", metavar="TERMOS",
+                        help="testa a busca de imagens grátis (Wikimedia/Pexels) sem baixar nada")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     try:
+        if args.search:
+            from image_sources import sources_from_env
+
+            for source in sources_from_env():
+                try:
+                    found = source.search(args.search)
+                except Exception as exc:
+                    print(f"[X] {source.name}: {exc}")
+                    continue
+                print(f"[OK] {source.name}: {len(found)} imagem(ns) com licença aceita")
+                for c in found[:5]:
+                    print(f"     {c.width}x{c.height}  {c.license:<16} {c.title[:60]}  {c.page_url}")
+            return 0
         if args.list_models:
             for name in list_image_models():
                 print(name)

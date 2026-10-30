@@ -5,7 +5,7 @@
 ```bash
 1. python -m venv .venv && .venv\Scripts\activate        # Mac/Linux: source .venv/bin/activate
 2. pip install -r requirements.txt && python setup_assets.py   # + FFmpeg instalado (ffmpeg -version)
-3. copy .env.example .env      # preencha GEMINI_API_KEY e GEMINI_IMAGE_MODEL (--list-models); roteiro: Claude Code logado (padrão) ou chave da API
+3. copy .env.example .env      # imagens reais grátis já vêm ligadas (opcional: PEXELS_API_KEY); roteiro: Claude Code logado (padrão) ou chave da API
 4. python main.py --check   &&   python main.py             # testa e gera o 1º vídeo agora
 5. start_scheduler.bat  +  install_autostart_windows.bat    # Mac/Linux: ./start_scheduler.sh && ./install_autostart.sh
 ```
@@ -19,7 +19,8 @@ fatos históricos da Venezuela (TikTok, Reels, YouTube Shorts).
 venezuela-stories/
 ├── database.py            # Parte 1 – histórico de temas (SQLite)
 ├── story_engine.py        # Parte 2 – roteiro + prompts de cena (JSON)
-├── visual_generator.py    # Parte 3 – imagens (Gemini) + clipes animados
+├── visual_generator.py    # Parte 3 – imagens (reais grátis ou Gemini) + clipes animados
+├── image_sources.py       # busca de imagens com licença livre (Wikimedia Commons, Pexels)
 ├── voice_engine.py        # Parte 4 – narração + timestamps por palavra
 ├── video_editor.py        # Parte 5 – montagem final (FFmpeg)
 ├── main.py                # orquestrador com checkpoint
@@ -101,20 +102,45 @@ Só depois disso o tema é gravado no banco como `verified`.
 ## Gerar imagens e clipes (`visual_generator.py`)
 
 ```bash
-python visual_generator.py --list-models     # modelos de imagem da sua conta -> GEMINI_IMAGE_MODEL
-python visual_generator.py                   # episódio de hoje
+python visual_generator.py --search "Lake Maracaibo"   # testa a busca de imagens grátis (não baixa nada)
+python visual_generator.py                             # episódio de hoje
 python visual_generator.py --date 2026-11-05
+python visual_generator.py --list-models               # só para IMAGE_PROVIDER=gemini
 ```
 
-Para cada cena de `current_episode.json`:
+**De onde vêm as imagens** (`IMAGE_PROVIDER` no `.env`):
 
-1. Monta o prompt com o **prefixo fixo de estilo** (mesmo "diretor de arte" em todas as cenas;
-   troque em `VISUAL_STYLE_PREFIX` no `.env` se quiser outro visual).
-2. Gera a imagem no Gemini em 9:16: 1 tentativa + até 3 novas (espera 2, 4 e 8 s), timeout de
-   120 s por chamada; erro 400/401/403/404 para na hora porque é configuração.
-3. Ajusta para 1080x1920 → `assets/episodes/{episode_id}/visuals/scene_XX.png`
-   (`episode_id` = `topic_id` do banco).
-4. Anima com FFmpeg → `visuals/scene_XX.mp4` (30 fps, H.264), com vinheta que "respira",
+| `IMAGE_PROVIDER` | Origem | Custo |
+|---|---|---|
+| `stock` (padrão) | fotos e pinturas **reais** com licença livre: Wikimedia Commons (sem chave) e Pexels (chave grátis em pexels.com/api, opcional, melhora as cenas genéricas) | US$ 0 |
+| `gemini` | imagens geradas por IA (`GEMINI_API_KEY` + `GEMINI_IMAGE_MODEL`; o plano gratuito não tem cota de imagem, exige faturamento) | ~US$ 0,07 por imagem |
+
+No modo `stock`, para cada cena de `current_episode.json`:
+
+1. Busca pela `image_query` que o roteiro escreve (2 a 6 palavras em inglês, ex.: "Lake Maracaibo
+   oil derricks"). Sem resultado, tenta os nomes próprios do `image_prompt`, depois a entidade e o
+   título do episódio.
+2. Só aceita domínio público, CC0, CC BY e licença Pexels. CC BY-SA só com `ALLOW_SHARE_ALIKE=1`
+   (essa licença pode exigir que o vídeo siga a mesma licença). NC (não comercial), ND (sem
+   derivações) e licença desconhecida nunca entram. Imagem com menos de 600 px no lado menor é
+   ignorada, e a mesma imagem não se repete no episódio.
+3. Cena sem nenhuma imagem livre reaproveita a da cena mais próxima (o movimento diferente varia
+   o visual). Episódio sem nenhuma imagem para com a explicação do que fazer.
+4. Os créditos ficam em `visuals/credits.json` e entram no `post_copy.txt`, na seção
+   **CRÉDITOS DAS IMAGENS**: cole na descrição do post, porque a licença CC BY exige.
+
+No modo `gemini`, cada cena usa o `image_prompt` com o **prefixo fixo de estilo** (mesmo
+"diretor de arte" em todas as cenas; troque em `VISUAL_STYLE_PREFIX`) e é gerada em 9:16: 1
+tentativa + até 3 novas (espera 2, 4 e 8 s), timeout de 120 s por chamada. Erro 400/401/403/404 ou
+cota inexistente (429 com "limit: 0") para na hora, porque esperar não resolve.
+
+Depois, nos dois modos:
+
+1. Ajusta para 1080x1920 → `assets/episodes/{episode_id}/visuals/scene_XX.png`
+   (`episode_id` = `topic_id` do banco). Imagem quase vertical é cortada no centro; horizontal ou
+   quadrada (a maioria das fotos e pinturas históricas) entra inteira sobre um fundo desfocado
+   dela mesma, sem cortar rostos.
+2. Anima com FFmpeg → `visuals/scene_XX.mp4` (30 fps, H.264), com vinheta que "respira",
    tremulação leve de projetor antigo e granulação de filme:
 
 | motion_type | Efeito |
@@ -125,7 +151,7 @@ Para cada cena de `current_episode.json`:
 | `slow_ken_burns` | zoom lento com leve deriva |
 | `pulse_glow` | zoom lento + brilho/saturação pulsando |
 
-Rodar de novo não gera de novo o que já existe (economiza API). `visuals/manifest.json` lista
+Rodar de novo não busca nem gera de novo o que já existe (economiza API). `visuals/manifest.json` lista
 as cenas; as durações são estimadas pelas palavras e o editor (Módulo 4) re-renderiza com a
 duração exata da narração.
 
@@ -191,7 +217,7 @@ python main.py --mark-published 2026-11-05
 ```
 
 Saída do dia: `output/AAAA-MM-DD_titulo-do-video.mp4` e `output/AAAA-MM-DD/post_copy.txt`
-(título, descrição com hashtags, hashtags, fontes e checklist antes de publicar).
+(título, descrição com hashtags, hashtags, fontes, créditos das imagens e checklist antes de publicar).
 
 **Anti-falhas**
 

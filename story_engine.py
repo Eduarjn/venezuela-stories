@@ -100,6 +100,9 @@ class Scene(BaseModel):
     scene_id: int = Field(ge=1)
     narration_text: str
     image_prompt: str
+    # Busca de imagem real (Wikimedia/Pexels): 2-6 palavras concretas. Opcional para
+    # manter compatíveis os episódios antigos.
+    image_query: str = ""
     motion_type: MotionType
     sfx_cue: SfxCue
 
@@ -248,10 +251,17 @@ ESTRUTURA DE RETENÇÃO
 - Pontuação pensada para emoção: frases curtas, reticências e pontos finais para pausas.
 
 IMAGENS
+- image_query: 2 a 6 palavras em INGLÊS para buscar uma FOTO OU PINTURA REAL num acervo
+  (Wikimedia Commons, Pexels). Use nomes concretos e pesquisáveis: lugar, pessoa histórica,
+  objeto, evento ou paisagem. Ex.: "Lake Maracaibo oil derricks", "Francisco de Miranda
+  portrait", "Angel Falls aerial", "lightning storm over lake". Nada abstrato ("tensão",
+  "mistério"). Cenas vizinhas podem repetir o mesmo assunto com outra busca.
+- Pessoas na image_query: só figuras históricas já falecidas (retrato, pintura ou foto de
+  época). Nunca busque pessoas vivas nem pessoas comuns pelo nome.
 - image_prompt em INGLÊS, descrevendo exatamente o que aconteceu na cena: enquadramento,
   época, luz, atmosfera. Estilo fixo em todas as cenas: "{STYLE_ANCHOR}".
-- Nunca o rosto de uma pessoa real identificável: use silhueta, de costas, multidão,
-  objetos ou lugares.
+- No image_prompt (imagem gerada por IA), nunca o rosto de uma pessoa real identificável:
+  use silhueta, de costas, multidão, objetos ou lugares.
 
 motion_type permitido: zoom_in_fast, pan_left_to_right, shake_impact, slow_ken_burns, pulse_glow.
 sfx_cue permitido: whoosh, thunder, old_film_click, suspense_riser, crowd_murmur.
@@ -273,8 +283,8 @@ JSON_TEMPLATE = {
          "supporting_quote": "trecho curto COPIADO LITERALMENTE da página que confirma o fato"}
     ],
     "scenes": [
-        {"scene_id": 1, "narration_text": "...", "image_prompt": "...",
-         "motion_type": "shake_impact", "sfx_cue": "thunder"}
+        {"scene_id": 1, "narration_text": "...", "image_query": "Lake Maracaibo lightning",
+         "image_prompt": "...", "motion_type": "shake_impact", "sfx_cue": "thunder"}
     ],
     "post_title": "título da publicação",
     "post_description": "descrição curta (na trilha fiction, a 1ª linha diz que é lenda)",
