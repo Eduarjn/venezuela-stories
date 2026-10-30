@@ -71,6 +71,20 @@ class ClaudeCodeBackendTest(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--resume") + 1], "abc")
         self.assertEqual(kwargs["input"], "corrija")
 
+    def test_resume_runs_in_the_same_folder_as_the_conversation(self):
+        # O Claude Code só encontra a conversa no --resume se rodar na mesma pasta
+        backend = self.backend(stream("1", session="abc"), stream("2", session="abc"),
+                               stream("3", session="xyz"))
+        backend.ask([{"role": "user", "content": "P"}], SearchEvidence())
+        backend.ask([{"role": "user", "content": "P"}, {"role": "assistant", "content": "x"},
+                     {"role": "user", "content": "corrija"}], SearchEvidence())
+        backend.ask([{"role": "user", "content": "nova"}], SearchEvidence())
+        cwds = [kwargs["cwd"] for _, kwargs in self.runner.calls]
+        self.assertEqual(cwds[0], cwds[1])
+        self.assertNotEqual(cwds[1], cwds[2])
+        self.assertFalse(Path(cwds[0]).exists())  # pasta da conversa anterior foi apagada
+        self.assertNotIn("--resume", self.runner.calls[2][0])
+
     def test_search_result_urls_become_evidence(self):
         evidence = SearchEvidence()
         self.backend(stream("ok", search_urls=[SRC_B])).ask([{"role": "user", "content": "P"}], evidence)

@@ -569,30 +569,37 @@ class ClaudeCodeBackend:
         self.model = model
         self.runner = runner
         self.session_id: str | None = None
+        # O Claude Code guarda cada conversa ligada à pasta em que ela começou:
+        # o --resume só a encontra se rodar na mesma pasta. Por isso a pasta
+        # temporária vive enquanto a conversa vive.
+        self._workdir: tempfile.TemporaryDirectory | None = None
 
     def ask(self, messages: list[dict], evidence: SearchEvidence) -> str:
-        if len(messages) == 1:
+        if len(messages) == 1 or self._workdir is None:
             self.session_id = None  # nova conversa
+            if self._workdir is not None:
+                self._workdir.cleanup()
+            self._workdir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         prompt = messages[-1]["content"]
-        with tempfile.TemporaryDirectory() as tmp:
-            system_file = Path(tmp) / "system.txt"
-            system_file.write_text(SYSTEM_PROMPT + CLAUDE_CODE_NOTE, encoding="utf-8")
-            cmd = [self.bin, "-p", "Siga as instruções recebidas pela entrada padrão.",
-                   "--output-format", "stream-json", "--verbose",
-                   "--append-system-prompt-file", str(system_file),
-                   "--allowedTools", "WebSearch,WebFetch",
-                   "--permission-mode", "dontAsk"]
-            if self.model:
-                cmd += ["--model", self.model]
-            if self.session_id:
-                cmd += ["--resume", self.session_id]
-            try:
-                # cwd vazio: o Claude Code não carrega CLAUDE.md/hooks de outra pasta.
-                proc = self.runner(cmd, input=prompt, capture_output=True, text=True,
-                                   encoding="utf-8", errors="replace", cwd=tmp,
-                                   timeout=CLAUDE_CODE_TIMEOUT_SECONDS)
-            except subprocess.TimeoutExpired as exc:
-                raise ValueError("o Claude Code passou do tempo limite; tente de novo") from exc
+        tmp = self._workdir.name
+        system_file = Path(tmp) / "system.txt"
+        system_file.write_text(SYSTEM_PROMPT + CLAUDE_CODE_NOTE, encoding="utf-8")
+        cmd = [self.bin, "-p", "Siga as instruções recebidas pela entrada padrão.",
+               "--output-format", "stream-json", "--verbose",
+               "--append-system-prompt-file", str(system_file),
+               "--allowedTools", "WebSearch,WebFetch",
+               "--permission-mode", "dontAsk"]
+        if self.model:
+            cmd += ["--model", self.model]
+        if self.session_id:
+            cmd += ["--resume", self.session_id]
+        try:
+            # cwd vazio: o Claude Code não carrega CLAUDE.md/hooks de outra pasta.
+            proc = self.runner(cmd, input=prompt, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", cwd=tmp,
+                               timeout=CLAUDE_CODE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError("o Claude Code passou do tempo limite; tente de novo") from exc
 
         final = None
         for line in proc.stdout.splitlines():
