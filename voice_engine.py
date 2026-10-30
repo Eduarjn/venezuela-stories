@@ -97,7 +97,8 @@ class EdgeTTSProvider:
         import edge_tts
 
         # Sem boundary="WordBoundary" o edge-tts 7.x manda só SentenceBoundary.
-        communicate = edge_tts.Communicate(text, voice, rate=self.rate, boundary="WordBoundary")
+        communicate = edge_tts.Communicate(text, voice, rate=self.rate, boundary="WordBoundary",
+                                           proxy=https_proxy_for(EDGE_TTS_HOST))
         audio = bytearray()
         words: list[Word] = []
         async for chunk in communicate.stream():
@@ -107,6 +108,22 @@ class EdgeTTSProvider:
                 start = chunk["offset"] / TICKS_PER_SECOND
                 words.append(Word(chunk["text"], start, start + chunk["duration"] / TICKS_PER_SECOND))
         return Speech(bytes(audio), "mp3", words)
+
+
+EDGE_TTS_HOST = "speech.platform.bing.com"
+
+
+def https_proxy_for(host: str) -> str | None:
+    """Proxy HTTPS das variáveis de ambiente (HTTPS_PROXY), se houver e o host não estiver
+    em NO_PROXY. O edge-tts usa aiohttp, que ignora essas variáveis: em rede que só sai
+    por proxy (ex.: Claude Code na nuvem) a voz falhava com "Name or service not known".
+    Sem HTTPS_PROXY (o normal no PC) devolve None e a conexão segue direta."""
+    from urllib.request import getproxies_environment, proxy_bypass_environment
+
+    proxy = getproxies_environment().get("https")
+    if proxy and not proxy_bypass_environment(host):
+        return proxy
+    return None
 
 
 def words_from_characters(chars: list[str], starts: list[float], ends: list[float]) -> list[Word]:

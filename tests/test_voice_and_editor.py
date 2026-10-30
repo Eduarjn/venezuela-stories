@@ -300,5 +300,53 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(sum(1 for r, g, b in pixels(top) if r > 200 and g > 170 and b < 90), 0)
 
 
+class EdgeProxyTest(unittest.TestCase):
+    """edge-tts (aiohttp) ignora HTTPS_PROXY; o projeto passa o proxy explicitamente."""
+
+    def test_proxy_comes_from_env_when_set(self):
+        from unittest import mock
+        from voice_engine import EDGE_TTS_HOST, https_proxy_for
+
+        with mock.patch.dict("os.environ", {"HTTPS_PROXY": "http://127.0.0.1:9"}, clear=True):
+            self.assertEqual(https_proxy_for(EDGE_TTS_HOST), "http://127.0.0.1:9")
+
+    def test_no_proxy_env_means_direct_connection(self):
+        from unittest import mock
+        from voice_engine import EDGE_TTS_HOST, https_proxy_for
+
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertIsNone(https_proxy_for(EDGE_TTS_HOST))
+
+    def test_host_in_no_proxy_skips_the_proxy(self):
+        from unittest import mock
+        from voice_engine import EDGE_TTS_HOST, https_proxy_for
+
+        env = {"HTTPS_PROXY": "http://127.0.0.1:9", "NO_PROXY": "localhost,speech.platform.bing.com"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertIsNone(https_proxy_for(EDGE_TTS_HOST))
+
+    def test_edge_tts_receives_the_proxy(self):
+        import types
+        from unittest import mock
+        import voice_engine
+
+        seen = {}
+
+        class FakeCommunicate:
+            def __init__(self, text, voice, **kwargs):
+                seen.update(kwargs)
+
+            async def stream(self):
+                yield {"type": "audio", "data": b"mp3"}
+                yield {"type": "WordBoundary", "offset": 0, "duration": 5_000_000, "text": "Olá"}
+
+        fake = types.SimpleNamespace(Communicate=FakeCommunicate)
+        with mock.patch.dict("sys.modules", {"edge_tts": fake}), \
+                mock.patch.dict("os.environ", {"HTTPS_PROXY": "http://127.0.0.1:9"}, clear=True):
+            speech = voice_engine.EdgeTTSProvider(voices={"pt-BR": "v"}, rate="+0%").synthesize("Olá", "pt-BR")
+        self.assertEqual(seen["proxy"], "http://127.0.0.1:9")
+        self.assertEqual(speech.audio, b"mp3")
+
+
 if __name__ == "__main__":
     unittest.main()
