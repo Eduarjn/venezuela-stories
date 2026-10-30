@@ -343,5 +343,53 @@ class PostCopyCreditsTest(unittest.TestCase):
         self.assertIn("geradas por IA", text)
 
 
+class RetryOnRateLimitTest(unittest.TestCase):
+    """O Wikimedia responde 429 a buscas seguidas; o pedido precisa esperar e repetir."""
+
+    def resp(self, status, retry_after=None):
+        from types import SimpleNamespace
+        import requests
+
+        def raise_for_status():
+            if status >= 400:
+                raise requests.HTTPError(f"{status} Client Error")
+        headers = {"Retry-After": retry_after} if retry_after else {}
+        return SimpleNamespace(status_code=status, headers=headers, raise_for_status=raise_for_status,
+                               json=lambda: {"ok": True}, content=b"img")
+
+    def test_waits_retry_after_and_succeeds(self):
+        from unittest import mock
+        import image_sources
+
+        waits = []
+        with mock.patch("requests.get", side_effect=[self.resp(429, "3"), self.resp(200)]) as get:
+            r = image_sources._request("https://commons.wikimedia.org/w/api.php", sleep=waits.append)
+        self.assertEqual(r.json(), {"ok": True})
+        self.assertEqual(get.call_count, 2)
+        self.assertEqual(waits, [3.0])
+
+    def test_gives_up_after_max_tries_with_the_http_error(self):
+        from unittest import mock
+        import requests
+        import image_sources
+
+        waits = []
+        with mock.patch("requests.get", return_value=self.resp(429, "999")) as get:
+            with self.assertRaises(requests.HTTPError):
+                image_sources._request("https://x", sleep=waits.append)
+        self.assertEqual(get.call_count, image_sources.MAX_TRIES)
+        self.assertTrue(all(w == image_sources.MAX_WAIT_SECONDS for w in waits))
+
+    def test_404_does_not_retry(self):
+        from unittest import mock
+        import requests
+        import image_sources
+
+        with mock.patch("requests.get", return_value=self.resp(404)) as get:
+            with self.assertRaises(requests.HTTPError):
+                image_sources._request("https://x", sleep=lambda s: None)
+        self.assertEqual(get.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

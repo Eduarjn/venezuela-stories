@@ -60,19 +60,45 @@ class Candidate:
         return asdict(self)
 
 
-def _get_json(url: str, params: dict, headers: dict) -> dict:
+RETRY_STATUS = {429, 503}
+MAX_TRIES = 4
+MAX_WAIT_SECONDS = 30.0
+
+
+def _request(url: str, *, sleep: Callable[[float], None] | None = None, **kwargs):
+    """GET que espera e tenta de novo quando o servidor pede calma (429/503).
+
+    O Wikimedia responde 429 quando várias buscas chegam em sequência (comum em IP
+    compartilhado, como a nuvem). Sem isso, todas as cenas falham e o episódio
+    parece não ter imagem livre nenhuma.
+    """
+    import time
+
     import requests
 
-    response = requests.get(url, params=params, headers={"User-Agent": USER_AGENT, **headers}, timeout=20)
-    response.raise_for_status()
+    sleep = sleep or time.sleep
+    for attempt in range(1, MAX_TRIES + 1):
+        response = requests.get(url, **kwargs)
+        if response.status_code not in RETRY_STATUS or attempt == MAX_TRIES:
+            response.raise_for_status()
+            return response
+        try:
+            wait = float(response.headers.get("Retry-After", ""))
+        except ValueError:
+            wait = 2.0 ** attempt
+        wait = min(max(wait, 1.0), MAX_WAIT_SECONDS)
+        log.info("%s respondeu %s; nova tentativa em %.0fs", url.split("?")[0], response.status_code, wait)
+        sleep(wait)
+    raise AssertionError("inalcançável")
+
+
+def _get_json(url: str, params: dict, headers: dict) -> dict:
+    response = _request(url, params=params, headers={"User-Agent": USER_AGENT, **headers}, timeout=20)
     return response.json()
 
 
 def download(url: str) -> bytes:
-    import requests
-
-    response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=60)
-    response.raise_for_status()
+    response = _request(url, headers={"User-Agent": USER_AGENT}, timeout=60)
     return response.content
 
 
