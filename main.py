@@ -383,13 +383,26 @@ def write_post_copy(day: date, episode: dict) -> Path:
     return post_copy
 
 
+def copy_final_video(video: Path, final: Path) -> Path:
+    """Copia o vídeo pronto. No Windows, um player com o vídeo antigo aberto bloqueia a cópia
+    (refazendo imagens ou voz do mesmo dia): salva com outro nome em vez de falhar o passo."""
+    try:
+        shutil.copy2(video, final)
+        return final
+    except PermissionError:
+        alt = final.with_name(f"{final.stem}_{datetime.now():%H%M%S}{final.suffix}")
+        log.warning("%s está aberto em outro programa; vídeo novo salvo como %s", final.name, alt.name)
+        shutil.copy2(video, alt)
+        return alt
+
+
 def step_edit(day: date) -> tuple[Path, Path]:
     from video_editor import VideoEditor, mark_rendered
 
     video = VideoEditor().edit(day)
     episode = json.loads((day_dir(day) / "current_episode.json").read_text(encoding="utf-8"))
-    final = output_dir() / f"{day.isoformat()}_{slugify_title(episode['topic_title'])}.mp4"
-    shutil.copy2(video, final)
+    final = copy_final_video(
+        video, output_dir() / f"{day.isoformat()}_{slugify_title(episode['topic_title'])}.mp4")
     post_copy = write_post_copy(day, episode)
     if episode.get("topic_id") is not None:
         mark_rendered(int(episode["topic_id"]), final)

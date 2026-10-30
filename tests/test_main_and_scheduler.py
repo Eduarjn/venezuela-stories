@@ -218,6 +218,22 @@ class RedoImagesTest(unittest.TestCase):
             with self.assertRaises(PipelineError):
                 main.redo_voice(DAY, [9])
 
+    def test_final_video_open_in_a_player_is_saved_under_another_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video, final = Path(tmp) / "final_video.mp4", Path(tmp) / "2026-11-01_x.mp4"
+            video.write_bytes(b"novo")
+            real_copy = main.shutil.copy2
+
+            def copy(src, dst):
+                if Path(dst) == final:
+                    raise PermissionError("[WinError 32] arquivo em uso por outro processo")
+                return real_copy(src, dst)
+            with mock.patch("main.shutil.copy2", side_effect=copy):
+                saved = main.copy_final_video(video, final)
+            self.assertNotEqual(saved, final)
+            self.assertTrue(saved.name.startswith("2026-11-01_x_"))
+            self.assertEqual(saved.read_bytes(), b"novo")
+
     def test_post_copy_is_rebuilt_without_rendering(self):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ, {"OUTPUT_DIR": tmp}), \
