@@ -78,6 +78,7 @@ para rodar `claude` e `/login`.
 
 ```bash
 python story_engine.py                                     # hoje, primeiro idioma de VIDEO_LANGUAGES
+python main.py --tema "Relâmpago do Catatumbo"            # vídeo com tema escolhido por você
 python story_engine.py --date 2026-11-05 --language es-419
 ```
 

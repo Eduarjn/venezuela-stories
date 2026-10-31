@@ -15,9 +15,13 @@ Arquitetura e comandos completos: `README.md`.
 ## Dia a dia
 - `python main.py --check` (saúde), `python main.py` (vídeo de hoje, retoma do checkpoint),
   `python main.py --date AAAA-MM-DD --status` (passos e erros do dia).
+- Tema escolhido: `python main.py --date AAAA-MM-DD --tema "Relâmpago do Catatumbo"` (o banco
+  continua impedindo tema repetido; sem `--tema`, o roteiro escolhe).
 - Imagens: Wikimedia Commons (sem chave) + Pexels (`PEXELS_API_KEY`, opcional). Só domínio
   público, CC0, CC BY e Pexels; CC BY-SA só com `ALLOW_SHARE_ALIKE=1`.
 - Testar uma busca sem baixar: `python visual_generator.py --search "Lake Maracaibo"`.
+- Busca genérica (toda em minúsculas) vai ao Wikimedia com "Venezuela" no fim (`IMAGE_REGION`);
+  o `--search` mostra a busca que realmente roda.
 
 ## Revisão antes de publicar (sempre)
 1. Leia a seção REVISÃO no fim de `output\AAAA-MM-DD\post_copy.txt` (cena -> imagem).

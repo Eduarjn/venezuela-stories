@@ -152,6 +152,19 @@ class StoryEngineTest(unittest.TestCase):
 
     # -- caminho feliz -------------------------------------------------------
 
+    def test_chosen_topic_replaces_the_seed_list_in_the_prompt(self):
+        from story_engine import TOPIC_SEEDS, build_user_prompt
+
+        livre = build_user_prompt("pt-BR", [], [])
+        self.assertIn(TOPIC_SEEDS[1], livre)
+        self.assertNotIn("TEMA DESTE EPISÓDIO", livre)
+        escolhido = build_user_prompt("pt-BR", ["O avião preso no topo do Salto Ángel"], [],
+                                      topic="Relâmpago do Catatumbo")
+        self.assertIn("TEMA DESTE EPISÓDIO (escolhido pelo usuário, obrigatório): Relâmpago do Catatumbo",
+                      escolhido)
+        self.assertNotIn(TOPIC_SEEDS[1], escolhido)
+        self.assertIn("O avião preso no topo do Salto Ángel", escolhido)  # repetição segue proibida
+
     def test_valid_episode_is_saved_and_topic_verified(self):
         path = self.engine(response(json.dumps(episode_data()))).create_episode(DAY)
 

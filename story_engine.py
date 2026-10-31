@@ -258,10 +258,12 @@ IMAGENS
 - image_query: 2 a 6 palavras em INGLÊS para buscar uma FOTO OU PINTURA REAL num acervo
   (Wikimedia Commons, Pexels). Prefira o lugar, objeto, evento ou pessoa histórica REAL da
   cena, com o nome próprio em maiúscula: "Lake Maracaibo oil derricks", "Francisco de Miranda
-  portrait", "Angel Falls aerial". Quando a narração cita um lugar, busque esse lugar. Busca
-  genérica só para cena sem lugar específico, e então toda em minúsculas ("lightning storm at
-  night"). Nada abstrato ("tensão", "mistério"). Cenas vizinhas podem repetir o mesmo assunto
-  com outra busca.
+  portrait", "Angel Falls aerial". Quando a narração cita um lugar, busque esse lugar. Em cena
+  sem lugar citado, prefira ainda o lugar ou o objeto real da história, com outro ângulo
+  ("Lake Maracaibo dusk", "Rafael Urdaneta Bridge pillar"). Busca genérica só quando a cena não
+  tem nada da história para mostrar, e então toda em minúsculas ("lightning storm at night"):
+  no acervo ela vira "<busca> Venezuela". Nada abstrato ("tensão", "mistério"). Cenas vizinhas
+  podem repetir o mesmo assunto com outra busca.
 - Varie o tipo de imagem ao longo do vídeo (foto, pintura, gravura, mapa, satélite): no máximo
   2 mapas ou imagens de satélite ("from space", "map") por vídeo, nunca em cenas seguidas.
 - Pessoas na image_query: só figuras históricas já falecidas (retrato, pintura ou foto de
@@ -309,18 +311,24 @@ LANGUAGE_NOTES = {
 }
 
 
-def build_user_prompt(language: str, used_topics: list[str], excluded: list[str]) -> str:
+def build_user_prompt(language: str, used_topics: list[str], excluded: list[str],
+                      topic: str | None = None) -> str:
     used = "\n".join(f"- {t}" for t in used_topics) or "- (nenhum ainda)"
     seeds = "\n".join(f"- {t}" for t in TOPIC_SEEDS)
     extra = "\n".join(f"- {t}" for t in excluded)
+    if topic:
+        # Tema escolhido pelo usuário (main.py --tema): substitui as ideias de partida.
+        choice = (f"TEMA DESTE EPISÓDIO (escolhido pelo usuário, obrigatório): {topic}\n"
+                  "Escreva sobre este tema; não troque por outro.")
+    else:
+        choice = f"Ideias de partida (opcional, pode escolher outro tema inédito e forte):\n{seeds}"
     return f"""Crie o episódio de hoje. Idioma: {language}.
 {LANGUAGE_NOTES[language]}
 
 TEMAS JÁ USADOS (proibido repetir o assunto, mesmo com outro ângulo):
 {used}
 {f"TAMBÉM PROIBIDOS NESTA RODADA:{chr(10)}{extra}" if excluded else ""}
-Ideias de partida (opcional, pode escolher outro tema inédito e forte):
-{seeds}
+{choice}
 
 Pesquise com web_search antes de escrever. Em "sources", supporting_quote deve ser copiado
 literalmente da página (será conferido automaticamente).
@@ -700,7 +708,8 @@ class StoryEngine:
 
     # -- fluxo principal ----------------------------------------------------
 
-    def create_episode(self, day: date | None = None, language: str = "pt-BR") -> Path:
+    def create_episode(self, day: date | None = None, language: str = "pt-BR",
+                       topic: str | None = None) -> Path:
         day = day or date.today()
         if language not in LANGUAGE_NOTES:
             raise StoryEngineError(f"idioma não suportado: {language}")
@@ -712,7 +721,8 @@ class StoryEngine:
         # As buscas de tentativas anteriores continuam valendo como evidência.
         evidence = SearchEvidence()
         messages = [{"role": "user",
-                     "content": build_user_prompt(language, self.db.used_topics_summary(), excluded)}]
+                     "content": build_user_prompt(language, self.db.used_topics_summary(), excluded,
+                                                  topic)}]
 
         last_error = ""
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -819,13 +829,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", type=date.fromisoformat, default=date.today())
     parser.add_argument("--language", choices=list(LANGUAGE_NOTES),
                         default=(os.getenv("VIDEO_LANGUAGES") or "pt-BR").split(",")[0].strip())
+    parser.add_argument("--tema", help='tema obrigatório do episódio (ex.: "Relâmpago do Catatumbo")')
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     try:
         engine = StoryEngine(StoryDatabase())
-        path = engine.create_episode(args.date, args.language)
+        path = engine.create_episode(args.date, args.language, args.tema)
     except (StoryEngineError, DaySlotTakenError, DuplicateTopicError) as exc:
         log.error("%s", exc)
         return 1

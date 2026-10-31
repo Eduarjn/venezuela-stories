@@ -55,6 +55,15 @@ class PipelineTest(unittest.TestCase):
         saved = json.loads(main.checkpoint_path(DAY).read_text(encoding="utf-8"))
         self.assertEqual(saved["final_video"], "v.mp4")
 
+    def test_topic_reaches_only_the_story_step(self):
+        received = []
+        steps = self.steps()
+        steps["story"] = lambda day, topic=None: received.append(topic)
+        run_pipeline(DAY, steps=steps, sleep=self.waits.append, connectivity=lambda: True,
+                     check_health=False, topic="Relâmpago do Catatumbo")
+        self.assertEqual(received, ["Relâmpago do Catatumbo"])
+        self.assertEqual(self.calls, ["visuals", "voice", "edit"])
+
     def test_transient_failure_is_retried_with_backoff(self):
         self.run_(self.steps(fail={"visuals": 1}))
         self.assertEqual(self.calls, ["story", "visuals", "visuals", "voice", "edit"])

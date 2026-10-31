@@ -283,7 +283,7 @@ def _language() -> str:
     return (os.getenv("VIDEO_LANGUAGES") or "pt-BR").split(",")[0].strip()
 
 
-def step_story(day: date) -> None:
+def step_story(day: date, topic: str | None = None) -> None:
     from database import StoryDatabase
     from story_engine import StoryEngine
 
@@ -298,7 +298,7 @@ def step_story(day: date) -> None:
             f"Marque-o como failed para gerar outro: python -c \"from database import "
             f"StoryDatabase; StoryDatabase().set_status({existing.id}, 'failed', error='json perdido')\""
         )
-    StoryEngine(db).create_episode(day, _language())
+    StoryEngine(db).create_episode(day, _language(), topic)
 
 
 def step_visuals(day: date) -> None:
@@ -433,8 +433,12 @@ def run_pipeline(
     sleep: Callable[[float], None] = time.sleep,
     connectivity: Callable[[], bool] = internet_ok,
     check_health: bool = True,
+    topic: str | None = None,
 ) -> Checkpoint:
     steps = steps or DEFAULT_STEPS
+    if topic:  # tema escolhido (--tema): só o roteiro precisa dele
+        story = steps["story"]
+        steps = {**steps, "story": lambda d: story(d, topic)}
     cp = Checkpoint.load(day)
     if cp.done:
         log.info("Vídeo de %s já está pronto: %s", day, cp.final_video)
@@ -539,6 +543,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--redo-voice", nargs="*", type=int, metavar="CENA",
                         help="refaz a narração e remonta o vídeo, depois de mudar o narration_text "
                              "no current_episode.json. Sem números: todas as cenas. Com números: só essas")
+    parser.add_argument("--tema", metavar="TEMA",
+                        help='tema obrigatório do roteiro, ex.: --tema "Relâmpago do Catatumbo" '
+                             "(o banco continua impedindo tema repetido)")
     parser.add_argument("--post-copy", action="store_true",
                         help="só refaz o post_copy.txt do dia (sem renderizar o vídeo)")
     args = parser.parse_args(argv)
@@ -584,7 +591,7 @@ def main(argv: list[str] | None = None) -> int:
                 redo_images(args.date, args.redo_images or None)
             if args.redo_voice is not None:
                 redo_voice(args.date, args.redo_voice or None)
-            cp = run_pipeline(args.date)
+            cp = run_pipeline(args.date, topic=args.tema)
     except PipelineError as exc:
         log.error("%s", exc)
         return 1
