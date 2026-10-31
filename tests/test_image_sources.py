@@ -343,6 +343,37 @@ class PostCopyCreditsTest(unittest.TestCase):
         self.assertIn("geradas por IA", text)
 
 
+class StandardThumbnailTest(unittest.TestCase):
+    """O Wikimedia limita o download de originais: foto menor que 1280 px usa a miniatura de 960."""
+
+    ORIGINAL = ("https://upload.wikimedia.org/wikipedia/commons/b/bf/Rafael_Urdaneta_Bridge%2C_1970s.jpg"
+                "?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=")
+
+    def info(self, w, h, thumb_kind="thumbnail_unscaled"):
+        return {"url": self.ORIGINAL + "original", "thumburl": self.ORIGINAL + thumb_kind, "width": w, "height": h}
+
+    def test_small_photo_uses_the_960_standard_thumbnail(self):
+        from image_sources import _download_url
+
+        self.assertEqual(_download_url(self.info(996, 670)),
+                         "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/bf/"
+                         "Rafael_Urdaneta_Bridge%2C_1970s.jpg/960px-Rafael_Urdaneta_Bridge%2C_1970s.jpg")
+
+    def test_large_photo_keeps_the_api_thumbnail(self):
+        from image_sources import _download_url
+
+        info = {"url": self.ORIGINAL + "original", "width": 4010, "height": 2337,
+                "thumburl": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e6/B.jpg/1280px-B.jpg"}
+        self.assertEqual(_download_url(info), info["thumburl"])
+
+    def test_keeps_original_when_960_would_be_too_small(self):
+        from image_sources import _download_url
+
+        # 800x600: não existe miniatura padrão >= 600 px de lado menor; 1200x700 a 960 vira 560.
+        self.assertEqual(_download_url(self.info(800, 600)), self.ORIGINAL + "thumbnail_unscaled")
+        self.assertEqual(_download_url(self.info(1200, 700)), self.ORIGINAL + "thumbnail_unscaled")
+
+
 class RetryOnRateLimitTest(unittest.TestCase):
     """O Wikimedia responde 429 a buscas seguidas; o pedido precisa esperar e repetir."""
 

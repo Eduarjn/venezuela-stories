@@ -24,6 +24,8 @@ USER_AGENT = "venezuela-stories/1.0 (gerador de vídeos educativos; https://gith
 MIN_SHORT_SIDE = 600
 SEARCH_LIMIT = 20  # muitos resultados do Commons são PDF, SVG ou vídeo e são descartados
 DOWNLOAD_WIDTH = 1280  # tamanho padrão de miniatura do Wikimedia (tamanhos fora do padrão são limitados)
+# Próximo tamanho padrão abaixo de 1280 (https://www.mediawiki.org/wiki/Common_thumbnail_sizes).
+SMALLER_STANDARD_WIDTH = 960
 
 
 @dataclass
@@ -120,6 +122,30 @@ def classify_license(code: str, short_name: str) -> str | None:
     return None
 
 
+def _download_url(info: dict) -> str:
+    """URL de download em tamanho padrão de miniatura do Wikimedia.
+
+    Para foto mais estreita que DOWNLOAD_WIDTH a API devolve o arquivo original, e o
+    Wikimedia limita o download de originais (429 "use thumbnail images in sizes listed
+    on https://w.wiki/GHai"). Nesse caso usa a miniatura padrão de 960 px, desde que ela
+    continue com o lado menor >= MIN_SHORT_SIDE; senão fica o original.
+    """
+    thumb = info.get("thumburl") or ""
+    original = info.get("url") or ""
+    if "/thumb/" in thumb or not original:
+        return thumb or original
+    width, height = int(info.get("width") or 0), int(info.get("height") or 0)
+    if width < SMALLER_STANDARD_WIDTH or not height:
+        return thumb or original
+    scaled_short = min(SMALLER_STANDARD_WIDTH, round(height * SMALLER_STANDARD_WIDTH / width))
+    marker = "/wikipedia/commons/"
+    if scaled_short < MIN_SHORT_SIDE or marker not in original:
+        return thumb or original
+    path = original.split("?", 1)[0].split(marker, 1)[1]  # ex.: b/bf/Nome.jpg
+    name = path.rsplit("/", 1)[-1]
+    return f"https://thumb.wikimedia.org{marker}thumb/{path}/{SMALLER_STANDARD_WIDTH}px-{name}"
+
+
 class WikimediaSource:
     name = "wikimedia"
     API = "https://commons.wikimedia.org/w/api.php"
@@ -151,7 +177,7 @@ class WikimediaSource:
             title = re.sub(r"^File:|\.[a-zA-Z0-9]+$", "", page.get("title", "")).strip()
             results.append(Candidate(
                 source=self.name,
-                download_url=info.get("thumburl") or info.get("url", ""),
+                download_url=_download_url(info),
                 page_url=info.get("descriptionurl") or "",
                 title=title,
                 author=_strip_html(value("Artist")) or _strip_html(value("Credit")),
