@@ -148,8 +148,36 @@ class EditorUnitTest(unittest.TestCase):
         chunks = chunk_words(self.words("Em 1999 o céu caiu. Ninguém esperava aquilo naquela noite".split()))
         texts = [[w.text for w in c] for c in chunks]
         self.assertTrue(all(2 <= len(c) <= 4 for c in texts), texts)
-        self.assertEqual(texts, [["Em", "1999", "o"], ["céu", "caiu."],
+        self.assertEqual(texts, [["Em", "1999"], ["o", "céu", "caiu."],
                                  ["Ninguém", "esperava"], ["aquilo", "naquela", "noite"]])
+
+    def test_chunks_break_where_speech_breathes(self):
+        # Vírgula do roteiro, artigo/preposição pendurado e nome próprio guiam a quebra.
+        from video_editor import mark_sentence_ends
+
+        def chunks(tts_words, narration):
+            marked = mark_sentence_ends(self.words(tts_words), narration)
+            return [" ".join(w.text for w in c) for c in chunk_words(marked)]
+
+        self.assertEqual(chunks("Neste lago o céu explode quase 300 noites por ano".split(),
+                                "Neste lago, o céu explode quase 300 noites por ano."),
+                         ["Neste lago", "o céu explode quase", "300 noites por ano"])
+        # O edge-tts devolve "em 2010" como uma palavra só; a vírgula depois de 2010 vale.
+        self.assertEqual(chunks(["Mas", "em 2010", "uma", "seca", "ligada", "ao", "El", "Niño",
+                                 "apagou", "o", "céu"],
+                                "Mas em 2010, uma seca ligada ao El Niño apagou o céu."),
+                         ["Mas em 2010", "uma seca ligada", "ao El Niño", "apagou o céu"])
+        self.assertIn("Lago de Maracaibo",
+                      chunks("Estamos no Lago de Maracaibo no noroeste da Venezuela".split(),
+                             "Estamos no Lago de Maracaibo, no noroeste da Venezuela."))
+
+    def test_mark_sentence_ends_also_marks_commas_and_dashes(self):
+        from video_editor import mark_sentence_ends
+
+        words = mark_sentence_ends(self.words(["Mas", "em 2010", "uma", "seca", "voltou", "e", "segue"]),
+                                   "Mas em 2010, uma seca voltou — e segue.")
+        self.assertEqual([w.ends_clause for w in words], [False, True, False, False, True, False, False])
+        self.assertEqual([w.ends_sentence for w in words], [False] * 6 + [True])
 
     def test_tts_words_without_punctuation_still_break_at_sentence_and_scene(self):
         # O edge-tts devolve "Auyán-tepui" sem o ponto; o fim da frase vem do narration_text.

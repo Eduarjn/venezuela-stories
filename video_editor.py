@@ -67,6 +67,18 @@ SUB_MAX_LINE_CHARS = 14
 SUB_MAX_LINES = 2
 SUB_POS_Y = 1180          # ~61% da altura: altura dos olhos, longe da UI do TikTok
 SUB_FONT_SIZE = 92
+# Onde quebrar o grupo (custos somados a 1 por grupo; palavra sozinha custa +2.5):
+SUB_CLAUSE_PENALTY = 1.5       # grupo atravessa vírgula: vale um grupo a mais para evitar
+SUB_WEAK_END_PENALTY = 1.2     # grupo termina em artigo/preposição/conjunção
+SUB_NAME_SPLIT_PENALTY = 1.5   # quebra no meio de nome próprio ("RAFAEL | URDANETA")
+SUB_WEAK_ENDINGS = frozenset((  # vêm antes do nome que completam: "MUITA | GENTE" tropeça
+    "a o as os ao aos à às um uma uns umas de do da dos das no na nos nas em num numa dum duma "
+    "pelo pela pelos pelas e ou que se por para pra com sem sob sobre entre até mais "
+    "seu sua seus suas meu minha nosso nossa este esta estes estas esse essa esses essas "
+    "neste nesta nesse nessa aquele aquela cada único única muito muita muitos muitas "
+    "todo toda todos todas outro outra outros outras nenhum nenhuma mesmo mesma "
+    "el la los las del y").split())
+SUB_NAME_LINKS = frozenset("de do da dos das del".split())  # "Lago de Maracaibo"
 YELLOW = "&H0000D7FF&"    # ASS usa BGR: #FFD700
 RED = "&H00303BFF&"       # #FF3B30
 WHITE = "&H00FFFFFF&"
@@ -93,6 +105,8 @@ class TimedWord:
     # Fim de frase ou de cena. O edge-tts devolve as palavras sem pontuação; a montagem
     # marca aqui onde a frase acaba (vindo do narration_text) para a legenda não cruzar.
     ends_sentence: bool = False
+    # Vírgula ou travessão depois da palavra: bom lugar para quebrar a legenda.
+    ends_clause: bool = False
 
 
 @dataclass
@@ -228,14 +242,38 @@ def _fits(chunk: list[TimedWord]) -> bool:
     return len(_lines([_clean(w.text) for w in chunk])) <= SUB_MAX_LINES
 
 
-def _chunk_cost(size: int) -> float:
-    # Cada grupo custa 1; grupo de 1 palavra custa bem mais; 2-3 palavras é o ideal.
-    return 1 + (2.5 if size == 1 else 0) + (0.3 if size == SUB_MAX_WORDS else 0)
+def _ends_clause(word: TimedWord) -> bool:
+    return word.ends_clause or bool(CLAUSE_END.search(word.text))
+
+
+def _chunk_cost(sentence: list[TimedWord], start: int, end: int) -> float:
+    """Custo do grupo sentence[start:end]. Cada grupo custa 1 e 2-3 palavras é o ideal.
+    Pesa contra: palavra sozinha, grupo que atravessa vírgula ("LAGO, O ESPETÁCULO"),
+    grupo pendurado em artigo ou preposição ("LIGADA AO EL") e nome partido ("RAFAEL | URDANETA")."""
+    chunk = sentence[start:end]
+    size = len(chunk)
+    cost = 1 + (2.5 if size == 1 else 0) + (0.3 if size == SUB_MAX_WORDS else 0)
+    cost += SUB_CLAUSE_PENALTY * sum(_ends_clause(w) for w in chunk[:-1])
+    if end < len(sentence):  # o grupo seguinte continua a frase
+        if _norm(chunk[-1].text) in SUB_WEAK_ENDINGS:
+            cost += SUB_WEAK_END_PENALTY
+        if _splits_name(sentence, end):
+            cost += SUB_NAME_SPLIT_PENALTY
+    return cost
+
+
+def _splits_name(sentence: list[TimedWord], end: int) -> bool:
+    """Quebrar antes de sentence[end] parte um nome: "RAFAEL | URDANETA", "LAGO | DE MARACAIBO"."""
+    last, nxt = sentence[end - 1].text, sentence[end].text
+    after = sentence[end + 1].text if end + 1 < len(sentence) else ""
+    return last[:1].isupper() and (nxt[:1].isupper()
+                                   or (_norm(nxt) in SUB_NAME_LINKS and after[:1].isupper()))
 
 
 def _balanced(sentence: list[TimedWord]) -> list[list[TimedWord]]:
     """Melhor divisão da frase (programação dinâmica): poucos grupos, que caibam na tela,
-    evitando palavra sozinha. Ex.: 5 palavras -> 3+2 ou 2+3, nunca 4+1."""
+    evitando palavra sozinha e quebrando onde a fala respira. Ex.: 5 palavras -> 3+2 ou
+    2+3, nunca 4+1."""
     n = len(sentence)
     best = [0.0] + [math.inf] * n
     cut = [0] * (n + 1)
@@ -244,7 +282,7 @@ def _balanced(sentence: list[TimedWord]) -> list[list[TimedWord]]:
             chunk = sentence[end - size:end]
             if size > 1 and not _fits(chunk):
                 continue
-            cost = best[end - size] + _chunk_cost(size)
+            cost = best[end - size] + _chunk_cost(sentence, end - size, end)
             if cost < best[end]:
                 best[end], cut[end] = cost, end - size
     chunks, end = [], n
@@ -255,6 +293,7 @@ def _balanced(sentence: list[TimedWord]) -> list[list[TimedWord]]:
 
 
 SENTENCE_END = re.compile(r"[.!?…:;]+[\"'”»)]*$")
+CLAUSE_END = re.compile(r"[,—–]+[\"'”»)]*$")
 
 
 def _norm(token: str) -> str:
@@ -262,26 +301,37 @@ def _norm(token: str) -> str:
 
 
 def mark_sentence_ends(words: list[TimedWord], narration: str) -> list[TimedWord]:
-    """Copia o fim de frase do texto da cena para as palavras temporizadas.
+    """Copia o fim de frase (e a vírgula) do texto da cena para as palavras temporizadas.
 
     Casa cada palavra (sem pontuação, como o edge-tts devolve) com o próximo token igual
-    do texto, olhando até 3 tokens à frente para tolerar diferenças pequenas. A última
-    palavra da cena sempre fecha a frase: a legenda nunca junta duas cenas.
+    do texto, olhando até 3 tokens à frente para tolerar diferenças pequenas; uma palavra
+    do TTS pode valer vários tokens ("em 2010" = "em" + "2010,"). A última palavra da cena
+    sempre fecha a frase: a legenda nunca junta duas cenas.
     """
-    tokens = [(_norm(t), bool(SENTENCE_END.search(t))) for t in narration.split()]
-    tokens = [t for t in tokens if t[0]]
+    tokens: list[tuple[str, bool, bool]] = []
+    for raw in narration.split():
+        key = _norm(raw)
+        sentence, clause = bool(SENTENCE_END.search(raw)), bool(CLAUSE_END.search(raw))
+        if key:
+            tokens.append((key, sentence, clause))
+        elif tokens:  # pontuação solta ("—", "...") vale para a palavra anterior
+            prev = tokens[-1]
+            tokens[-1] = (prev[0], prev[1] or sentence, prev[2] or clause)
     marked, pos = [], 0
     for w in words:
-        ends = False
+        ends = clause = False
         key = _norm(w.text)
-        for j in range(pos, min(pos + 3, len(tokens))):
-            if tokens[j][0] == key:
-                ends, pos = tokens[j][1], j + 1
+        for j in range(pos, min(pos + 3, len(tokens)) if key else pos):
+            joined, k = "", j
+            while k < len(tokens) and len(joined) < len(key):
+                joined, k = joined + tokens[k][0], k + 1
+            if joined == key:
+                (_, ends, clause), pos = tokens[k - 1], k
                 break
-        marked.append(TimedWord(w.text, w.start, w.end, ends))
+        marked.append(TimedWord(w.text, w.start, w.end, ends, clause))
     if marked:
         last = marked[-1]
-        marked[-1] = TimedWord(last.text, last.start, last.end, True)
+        marked[-1] = TimedWord(last.text, last.start, last.end, True, last.ends_clause)
     return marked
 
 
