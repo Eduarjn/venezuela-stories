@@ -170,6 +170,32 @@ class FinderTest(unittest.TestCase):
         self.assertEqual(finder.find(["lightning storm at night"], set())[0].title, "PexelsStorm")
         self.assertEqual(finder.find(["Lake Maracaibo"], set())[0].title, "Maracaibo")
 
+    def test_generic_query_is_tied_to_the_region_in_the_archive_only(self):
+        # "calm lake at dawn" sozinha trazia um lago dos Pirineus: no acervo vira "... Venezuela".
+        commons = FakeSource("wikimedia", {"calm lake at dawn": [cand("Pirineus")],
+                                           "calm lake at dawn Venezuela": [cand("Maracaibo")]})
+        pexels = FakeSource("pexels", {})
+        pexels.generic = True
+        finder = StockImageFinder([commons, pexels], fetch=lambda url: b"x", region="Venezuela")
+        self.assertEqual(finder.find(["calm lake at dawn"], set())[0].title, "Maracaibo")
+        self.assertEqual(commons.queries, ["calm lake at dawn Venezuela"])
+        self.assertEqual(pexels.queries, ["calm lake at dawn"])
+
+    def test_proper_name_query_is_not_changed_and_region_can_be_off(self):
+        commons = FakeSource("wikimedia", {"Lake Maracaibo": [cand("Maracaibo")], "storm": [cand("Denver")]})
+        finder = StockImageFinder([commons], fetch=lambda url: b"x", region="Venezuela")
+        finder.find(["Lake Maracaibo"], set())
+        self.assertEqual(commons.queries, ["Lake Maracaibo"])
+        sem_regiao = StockImageFinder([commons], fetch=lambda url: b"x", region="")
+        self.assertEqual(sem_regiao.find(["storm"], set())[0].title, "Denver")
+
+    def test_generic_query_without_regional_result_falls_back_to_next_query(self):
+        # Sem foto "na Venezuela", passa para a próxima busca da cena em vez de pegar o exterior.
+        commons = FakeSource("wikimedia", {"ship engine room": [cand("Submarino")],
+                                           "Lake Maracaibo": [cand("Maracaibo")]})
+        finder = StockImageFinder([commons], fetch=lambda url: b"x", region="Venezuela")
+        self.assertEqual(finder.find(["ship engine room", "Lake Maracaibo"], set())[0].title, "Maracaibo")
+
     def test_each_query_is_searched_once_and_failed_downloads_are_not_retried(self):
         commons = FakeSource("wikimedia", {"q": [cand("broken"), cand("ok1"), cand("ok2")]})
         fetched = []

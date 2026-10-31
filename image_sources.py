@@ -221,6 +221,11 @@ class PexelsSource:
         return results
 
 
+def region_from_env() -> str:
+    """Região que amarra as buscas genéricas no acervo (IMAGE_REGION; vazio desliga)."""
+    return os.getenv("IMAGE_REGION", "Venezuela").strip()
+
+
 def sources_from_env() -> list:
     allow_sa = os.getenv("ALLOW_SHARE_ALIKE", "0").strip().lower() in ("1", "true", "sim", "yes")
     sources: list = [WikimediaSource(allow_share_alike=allow_sa)]
@@ -234,10 +239,11 @@ class StockImageFinder:
     """Procura, por ordem de consultas e fontes, a primeira imagem boa ainda não usada."""
 
     def __init__(self, sources: list, fetch: Callable[[str], bytes] = download,
-                 min_short_side: int = MIN_SHORT_SIDE) -> None:
+                 min_short_side: int = MIN_SHORT_SIDE, region: str = "") -> None:
         self.sources = sources
         self.fetch = fetch
         self.min_short_side = min_short_side
+        self.region = region.strip()
         # Cada busca roda uma vez por episódio: as cenas vizinhas reaproveitam os resultados.
         self._results: dict[tuple[str, str], list[Candidate]] = {}
         self._failed_downloads: set[str] = set()
@@ -252,6 +258,15 @@ class StockImageFinder:
                 self._results[key] = []
         return self._results[key]
 
+    def query_for(self, source, query: str) -> str:
+        """Busca genérica (toda em minúsculas) no acervo ganha a região: "calm lake at dawn"
+        sozinha trazia lago dos Pirineus, submarino americano, ponte do Oregon. Sem resultado
+        na região, a cena cai no reaproveitamento de imagem das cenas vizinhas. O banco de
+        fotos (Pexels) recebe a busca original: foto de banco não mostra lugar reconhecível."""
+        if self.region and query.islower() and not getattr(source, "generic", False):
+            return f"{query} {self.region}"
+        return query
+
     def _sources_for(self, query: str) -> list:
         # Busca sem nome próprio ("lightning storm at night"): banco de fotos primeiro (Pexels:
         # vertical, sem crédito obrigatório). Com nome próprio ("Lake Maracaibo"): acervo primeiro.
@@ -262,7 +277,7 @@ class StockImageFinder:
     def find(self, queries: list[str], used: set[str]) -> tuple[Candidate, bytes] | None:
         for query in queries:
             for source in self._sources_for(query):
-                for candidate in self._search(source, query):
+                for candidate in self._search(source, self.query_for(source, query)):
                     if candidate.page_url in used or not candidate.download_url:
                         continue
                     if candidate.download_url in self._failed_downloads:

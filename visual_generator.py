@@ -383,9 +383,9 @@ class VisualGenerator:
         self.stock = None
         self.image_client = None
         if stock_finder is not None or (image_client is None and resolve_image_provider() == "stock"):
-            from image_sources import StockImageFinder, sources_from_env
+            from image_sources import StockImageFinder, region_from_env, sources_from_env
 
-            self.stock = stock_finder or StockImageFinder(sources_from_env())
+            self.stock = stock_finder or StockImageFinder(sources_from_env(), region=region_from_env())
             return
         if image_client is None:
             model = os.getenv("GEMINI_IMAGE_MODEL")
@@ -601,11 +601,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.search:
-            from image_sources import sources_from_env
+            from image_sources import StockImageFinder, region_from_env, sources_from_env
 
+            finder = StockImageFinder([], region=region_from_env())
             for source in sources_from_env():
+                query = finder.query_for(source, args.search)
+                if query != args.search:
+                    print(f"[i] {source.name}: busca genérica vira \"{query}\"")
                 try:
-                    found = source.search(args.search)
+                    found = source.search(query)
                 except Exception as exc:
                     print(f"[X] {source.name}: {exc}")
                     continue
