@@ -127,6 +127,31 @@ class EditorUnitTest(unittest.TestCase):
         self.assertEqual(texts, [["Em", "1999", "o"], ["céu", "caiu."],
                                  ["Ninguém", "esperava"], ["aquilo", "naquela", "noite"]])
 
+    def test_tts_words_without_punctuation_still_break_at_sentence_and_scene(self):
+        # O edge-tts devolve "Auyán-tepui" sem o ponto; o fim da frase vem do narration_text.
+        from video_editor import mark_sentence_ends
+
+        cena12 = mark_sentence_ends(
+            self.words("Estão no topo do Auyán-tepui Cercados de abismos".split()),
+            "Estão no topo do Auyán-tepui. Cercados de abismos.")
+        cena13 = mark_sentence_ends(
+            self.words("Lá em cima isolados restava uma única opção".split(), start=2.4),
+            "Lá em cima, isolados... restava uma única opção.")
+        texts = [[w.text for w in c] for c in chunk_words(cena12 + cena13)]
+        self.assertIn(["Cercados", "de", "abismos"], texts)
+        self.assertIn(["Lá", "em", "cima", "isolados"], texts)
+        for chunk in texts:
+            self.assertFalse("Auyán-tepui" in chunk and "Cercados" in chunk, texts)
+            self.assertFalse("abismos" in chunk and "Lá" in chunk, texts)
+
+    def test_mark_sentence_ends_tolerates_tts_differences(self):
+        from video_editor import mark_sentence_ends
+
+        # Ponto depois de número também fecha a frase; a última palavra da cena sempre fecha.
+        words = mark_sentence_ends(self.words(["Em", "1937", "ele", "volta", "decidido"]),
+                                   "Em 1937. Ele volta, decidido")
+        self.assertEqual([w.ends_sentence for w in words], [False, True, False, False, True])
+
     def test_long_pause_also_breaks_the_group(self):
         words = self.words(["Ali", "estava"]) + [TimedWord("ele", 2.0, 2.3), TimedWord("parado", 2.3, 2.6)]
         self.assertEqual([[w.text for w in c] for c in chunk_words(words)],

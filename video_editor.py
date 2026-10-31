@@ -90,6 +90,9 @@ class TimedWord:
     text: str
     start: float
     end: float
+    # Fim de frase ou de cena. O edge-tts devolve as palavras sem pontuação; a montagem
+    # marca aqui onde a frase acaba (vindo do narration_text) para a legenda não cruzar.
+    ends_sentence: bool = False
 
 
 @dataclass
@@ -216,7 +219,7 @@ def _sentences(words: list[TimedWord]) -> list[list[TimedWord]]:
     for i, w in enumerate(words):
         groups[-1].append(w)
         nxt = words[i + 1] if i + 1 < len(words) else None
-        if nxt and (re.search(r"[.!?…:;]$", w.text) or nxt.start - w.end > 0.35):
+        if nxt and (w.ends_sentence or re.search(r"[.!?…:;]$", w.text) or nxt.start - w.end > 0.35):
             groups.append([])
     return [g for g in groups if g]
 
@@ -249,6 +252,37 @@ def _balanced(sentence: list[TimedWord]) -> list[list[TimedWord]]:
         chunks.append(sentence[cut[end]:end])
         end = cut[end]
     return chunks[::-1]
+
+
+SENTENCE_END = re.compile(r"[.!?…:;]+[\"'”»)]*$")
+
+
+def _norm(token: str) -> str:
+    return re.sub(r"[^\w]", "", token.lower())
+
+
+def mark_sentence_ends(words: list[TimedWord], narration: str) -> list[TimedWord]:
+    """Copia o fim de frase do texto da cena para as palavras temporizadas.
+
+    Casa cada palavra (sem pontuação, como o edge-tts devolve) com o próximo token igual
+    do texto, olhando até 3 tokens à frente para tolerar diferenças pequenas. A última
+    palavra da cena sempre fecha a frase: a legenda nunca junta duas cenas.
+    """
+    tokens = [(_norm(t), bool(SENTENCE_END.search(t))) for t in narration.split()]
+    tokens = [t for t in tokens if t[0]]
+    marked, pos = [], 0
+    for w in words:
+        ends = False
+        key = _norm(w.text)
+        for j in range(pos, min(pos + 3, len(tokens))):
+            if tokens[j][0] == key:
+                ends, pos = tokens[j][1], j + 1
+                break
+        marked.append(TimedWord(w.text, w.start, w.end, ends))
+    if marked:
+        last = marked[-1]
+        marked[-1] = TimedWord(last.text, last.start, last.end, True)
+    return marked
 
 
 def chunk_words(words: list[TimedWord]) -> list[list[TimedWord]]:
@@ -343,7 +377,9 @@ class VideoEditor:
                 raise VideoEditorError(f"cena {sid} sem áudio no timeline.json")
             # Duração em frames inteiros: vídeo e áudio terminam no mesmo frame.
             frames = max(1, math.ceil(voice["duration"] * FPS - 1e-6))
-            words = [TimedWord(w["text"], cursor + w["start"], cursor + w["end"]) for w in voice["words"]]
+            words = mark_sentence_ends(
+                [TimedWord(w["text"], cursor + w["start"], cursor + w["end"]) for w in voice["words"]],
+                scene.get("narration_text", ""))
             plans.append(ScenePlan(sid, image, base / "audio" / voice["audio"], scene["motion_type"],
                                    scene["sfx_cue"], transition_for(index, scene["sfx_cue"]),
                                    frames, cursor, words))
