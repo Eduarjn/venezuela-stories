@@ -223,12 +223,13 @@ class VisualGeneratorTest(unittest.TestCase):
         self.assertEqual(estimate_duration("Curta."), 3.0)
         self.assertAlmostEqual(estimate_duration(" ".join(["palavra"] * 13)), 5.5)
 
-    def test_every_motion_builds_a_filter(self):
+    def test_every_motion_builds_a_subpixel_filter(self):
         for motion in MOTION_TYPES:
             vf = motion_filter(motion, 4.0)
-            self.assertIn("zoompan=", vf)
-            self.assertIn("d=120", vf)  # 4s * 30fps
-            self.assertIn("s=1080x1920", vf)
+            self.assertIn("perspective=", vf)
+            self.assertIn("interpolation=cubic:eval=frame", vf)  # subpixel, quadro a quadro
+            self.assertNotIn("zoompan", vf)  # arredonda para pixel inteiro e treme (bug #4298)
+            self.assertIn("scale=1080:1920", vf)
         self.assertIn("eq=brightness", motion_filter("pulse_glow", 4.0))
 
     def test_zoom_in_fast_is_fast_for_half_a_second_then_slow(self):
@@ -250,6 +251,37 @@ class VisualGeneratorTest(unittest.TestCase):
     def test_unknown_motion_is_rejected(self):
         with self.assertRaises(ValueError):
             motion_filter("spin_360", 3.0)
+
+    @unittest.skipIf(shutil.which("ffmpeg") is None, "FFmpeg não instalado")
+    def test_pan_moves_the_same_amount_every_frame(self):
+        # Regressão do "vídeo travado": com zoompan a panorâmica andava 1,1 px e 2,3 px em
+        # quadros alternados (desvio ~1,2 px). Com perspective o passo fica constante.
+        import numpy as np
+
+        rng = np.random.default_rng(7)
+        texture = (rng.random((240, 135)) * 255).astype("uint8")
+        image = Path(self.tmp.name) / "textura.png"
+        from PIL import Image
+        Image.fromarray(texture).resize((1080, 1920), Image.BICUBIC).convert("RGB").save(image)
+        # 2,5 s: passo fracionário por quadro, como nos vídeos reais (1 s daria passo inteiro).
+        clip = render_clip(image, "pan_left_to_right", 2.5, Path(self.tmp.name) / "pan.mp4")
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(clip), "-vf", "crop=256:256:412:832",
+                              "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                             capture_output=True, check=True).stdout
+        frames = np.frombuffer(raw, np.uint8).reshape(-1, 256, 256).astype(np.float64)
+        window = np.outer(np.hanning(256), np.hanning(256))
+
+        def dx(a, b):
+            spec = np.fft.fft2(a * window) * np.conj(np.fft.fft2(b * window))
+            r = np.fft.ifft2(spec / (np.abs(spec) + 1e-9)).real
+            py, px = np.unravel_index(np.argmax(r), r.shape)
+            left, mid, right = r[py, (px - 1) % 256], r[py, px], r[py, (px + 1) % 256]
+            v = px + (left - right) / (2 * (left - 2 * mid + right))
+            return v - 256 if v > 128 else v
+
+        steps = np.array([dx(frames[i], frames[i + 1]) for i in range(3, len(frames) - 4)])
+        self.assertGreater(abs(steps.mean()), 1.0)  # está andando
+        self.assertLess(np.std(np.diff(steps)), 0.2, steps.round(2))  # e sempre no mesmo ritmo
 
     @unittest.skipIf(shutil.which("ffmpeg") is None, "FFmpeg não instalado")
     def test_ffmpeg_renders_every_motion_with_exact_size_and_frames(self):

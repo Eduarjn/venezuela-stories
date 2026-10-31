@@ -127,17 +127,18 @@ def motion_filter(motion: str, duration: float, fps: int = FPS,
                   width: int = WIDTH, height: int = HEIGHT, transition: str | None = None) -> str:
     """Filtro FFmpeg (-vf) que transforma uma imagem parada em clipe com movimento.
 
-    A imagem é ampliada 2x antes do zoompan para o movimento não "tremer" por
-    arredondamento de pixel.
+    O movimento usa o filtro perspective com interpolação cúbica, que posiciona a imagem
+    com precisão de subpixel. O zoompan arredonda a posição para pixels inteiros (bug
+    #4298 do FFmpeg): numa panorâmica a imagem andava 1,1 px e 2,3 px em quadros
+    alternados, e o vídeo parecia "travado". Entrada: a imagem em loop (-loop 1).
     """
     if motion not in MOTION_TYPES:
         raise ValueError(f"motion_type desconhecido: {motion!r}")
     if transition is not None and transition not in TRANSITIONS:
         raise ValueError(f"transição desconhecida: {transition!r}")
     n = max(1, round(duration * fps))
-    big_w, big_h = width * 2, height * 2
-    center_x = "iw/2-(iw/zoom/2)"
-    center_y = "ih/2-(ih/zoom/2)"
+    center_x = "(W-W/({z}))/2"
+    center_y = "(H-H/({z}))/2"
 
     if motion == "zoom_in_fast":
         # Zoom rápido até 1.25x nos primeiros 0.5s, depois aproximação lenta até 1.33x.
@@ -146,27 +147,32 @@ def motion_filter(motion: str, duration: float, fps: int = FPS,
         x, y = center_x, center_y
     elif motion == "slow_ken_burns":
         z = f"1.04+0.08*on/{n}"
-        x = f"(iw-iw/zoom)*(0.3+0.4*on/{n})"
-        y = "(ih-ih/zoom)*0.45"
+        x = f"(W-W/({{z}}))*(0.3+0.4*on/{n})"
+        y = "(H-H/({z}))*0.45"
     elif motion == "pan_left_to_right":
         z = "1.2"
-        x = f"(iw-iw/zoom)*on/{n}"
-        y = "(ih-ih/zoom)/2"
+        x = f"(W-W/({{z}}))*on/{n}"
+        y = center_y
     elif motion == "shake_impact":
-        # Tremor forte no primeiro meio segundo, que some aos poucos.
+        # Tremor forte no primeiro meio segundo, que some aos poucos. Com zoom 1.12 sobra
+        # ~58 px de margem na horizontal e ~103 px na vertical.
         decay = f"max(0,1-on/{fps * 0.5})"
         z = "1.12"
-        # Amplitude em pixels da imagem ampliada 2x; a margem com zoom 1.12 é ~115px.
-        x = f"(iw-iw/zoom)/2+70*sin(on*1.9)*{decay}"
-        y = f"(ih-ih/zoom)/2+55*cos(on*2.7)*{decay}"
+        x = f"(W-W/({{z}}))/2+35*sin(on*1.9)*{decay}"
+        y = f"(H-H/({{z}}))/2+27.5*cos(on*2.7)*{decay}"
     else:  # pulse_glow
         z = f"1.03+0.05*on/{n}"
         x, y = center_x, center_y
 
+    x0, y0 = x.format(z=z), y.format(z=z)
+    x1, y1 = f"{x0}+W/({z})", f"{y0}+H/({z})"
+    # Cantos do recorte na imagem de origem -> cantos do quadro (sense=source, o padrão).
+    corners = (f"x0='{x0}':y0='{y0}':x1='{x1}':y1='{y0}':"
+               f"x2='{x0}':y2='{y1}':x3='{x1}':y3='{y1}'")
     filters = [
-        f"scale={big_w}:{big_h}:force_original_aspect_ratio=increase",
-        f"crop={big_w}:{big_h}",
-        f"zoompan=z='{z}':x='{x}':y='{y}':d={n}:s={width}x{height}:fps={fps}",
+        f"scale={width}:{height}:force_original_aspect_ratio=increase",
+        f"crop={width}:{height}",
+        f"perspective={corners}:interpolation=cubic:eval=frame",
     ]
     if motion == "pulse_glow":
         filters.append(
@@ -191,7 +197,7 @@ def render_clip(image: Path, motion: str, duration: float, output: Path,
     frames = max(1, round(duration * FPS))
     cmd = [
         ffmpeg, "-y", "-loglevel", "error",
-        "-i", str(image),
+        "-loop", "1", "-framerate", str(FPS), "-i", str(image),
         "-vf", motion_filter(motion, duration, transition=transition),
         "-frames:v", str(frames),
         "-r", str(FPS),
