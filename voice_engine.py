@@ -23,12 +23,14 @@ import base64
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import asdict, dataclass
+import unicodedata
+from dataclasses import asdict, dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Callable, Protocol
@@ -38,9 +40,13 @@ log = logging.getLogger("voice_engine")
 PROJECT_DIR = Path(__file__).parent
 SAMPLE_RATE = 48000
 
-MAX_GAP_SECONDS = 0.25   # pausa máxima permitida dentro e entre cenas
-LEAD_SECONDS = 0.04      # ar antes da primeira palavra da cena
-TAIL_SECONDS = 0.12      # ar depois da última palavra (somado ao LEAD da próxima: 0,16 s)
+# Pausas: o roteiro marca pausas dramáticas com reticências e pontos. Com teto de 0,25 s
+# todas viravam a mesma pausa curta e a fala soava atropelada ("travada"); 0,5 s mantém o
+# respiro dos momentos de virada sem deixar silêncio morto.
+MAX_GAP_SECONDS = 0.5    # pausa máxima permitida dentro de uma cena
+LEAD_SECONDS = 0.06      # ar antes da primeira palavra da cena
+TAIL_SECONDS = 0.2       # ar depois da última palavra (somado ao LEAD da próxima: 0,26 s)
+FADE_SECONDS = 0.01      # entrada/saída suave em cada corte de silêncio (evita estalo)
 
 MAX_ATTEMPTS = 4
 BACKOFF_SECONDS = (2, 4, 8)
@@ -88,7 +94,7 @@ class EdgeTTSProvider:
             "pt-BR": os.getenv("EDGE_TTS_VOICE_PT") or DEFAULT_EDGE_VOICES["pt-BR"],
             "es-419": os.getenv("EDGE_TTS_VOICE_ES") or DEFAULT_EDGE_VOICES["es-419"],
         }
-        self.rate = rate or os.getenv("EDGE_TTS_RATE") or "+5%"
+        self.rate = rate or os.getenv("EDGE_TTS_RATE") or "+0%"
 
     def synthesize(self, text: str, language: str) -> Speech:
         return asyncio.run(self._synthesize(text, self.voices[language]))
@@ -259,6 +265,52 @@ def probe_duration(path: Path) -> float:
     return float(out.strip())
 
 
+# --------------------------------------------------------------------------- pronúncia
+
+# Só para a voz em português: nomes em espanhol reescritos como se falam. A legenda continua
+# com a grafia original (as palavras devolvidas pelo TTS são trocadas de volta).
+PRONUNCIATION_PT = {
+    "Betancourt": "Betancur",
+}
+# Nomes com "ll" que não são espanhóis (a regra "ll" -> "y" não vale para eles).
+LL_EXCEPTIONS = {"hollywood", "bill", "wall", "mallory", "kellogg", "lloyd", "william", "williams"}
+_CAPITALIZED = re.compile(r"\b[A-ZÁÉÍÓÚÂÊÔÃÕÇÑ][\wÀ-ÿ]*")
+
+
+def _norm(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text.lower())
+    return "".join(c for c in text if c.isalnum() and not unicodedata.combining(c))
+
+
+def pronunciation_text(text: str, language: str) -> tuple[str, dict[str, str]]:
+    """Texto para o TTS e o mapa {palavra falada normalizada: grafia original}.
+
+    Na voz pt-BR, "Padilla" saía "Padila" (o "ll" espanhol soa como "i": "Padiya") e
+    "Betancourt" saía "Betancorta". Medido com reconhecimento de fala (Whisper).
+    """
+    if language != "pt-BR":
+        return text, {}
+    restore: dict[str, str] = {}
+
+    def fix(match: re.Match) -> str:
+        word = match.group(0)
+        spoken = PRONUNCIATION_PT.get(word)
+        if spoken is None and "ll" in word.lower() and _norm(word) not in LL_EXCEPTIONS:
+            spoken = word.replace("ll", "y").replace("Ll", "Y").replace("LL", "Y")
+        if spoken is None or spoken == word:
+            return word
+        restore[_norm(spoken)] = word
+        return spoken
+
+    return _CAPITALIZED.sub(fix, text), restore
+
+
+def restore_spelling(words: list["Word"], restore: dict[str, str]) -> list["Word"]:
+    if not restore:
+        return words
+    return [replace(w, text=restore.get(_norm(w.text), w.text)) for w in words]
+
+
 def plan_segments(words: list[Word], audio_duration: float,
                   max_gap: float = MAX_GAP_SECONDS, lead: float = LEAD_SECONDS,
                   tail: float = TAIL_SECONDS) -> list[tuple[float, float]]:
@@ -296,8 +348,14 @@ def remap_words(words: list[Word], segments: list[tuple[float, float]]) -> list[
 def tighten_audio(source: Path, words: list[Word], output: Path) -> tuple[list[Word], float]:
     """Corta silêncios longos e converte para WAV 48 kHz mono. Devolve palavras e duração."""
     segments = plan_segments(words, probe_duration(source))
-    parts = [f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS[a{i}]"
-             for i, (s, e) in enumerate(segments)]
+    def part(i: int, s: float, e: float) -> str:
+        chain = f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS"
+        if e - s > 4 * FADE_SECONDS:
+            chain += (f",afade=t=in:d={FADE_SECONDS}"
+                      f",afade=t=out:st={e - s - FADE_SECONDS:.3f}:d={FADE_SECONDS}")
+        return chain + f"[a{i}]"
+
+    parts = [part(i, s, e) for i, (s, e) in enumerate(segments)]
     joined = "".join(f"[a{i}]" for i in range(len(segments)))
     graph = ";".join(parts) + f";{joined}concat=n={len(segments)}:v=0:a=1[out]"
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -371,7 +429,9 @@ class VoiceEngine:
                 duration = probe_duration(wav)
                 log.info("Cena %s: áudio já existe (%.2fs)", sid, duration)
             else:
-                speech = self._synthesize(scene["narration_text"], language)
+                spoken, restore = pronunciation_text(scene["narration_text"], language)
+                speech = self._synthesize(spoken, language)
+                speech = replace(speech, words=restore_spelling(speech.words, restore))
                 raw = audio_dir / f"scene_{sid:02d}.raw.{speech.extension}"
                 raw.write_bytes(speech.audio)
                 words, duration = tighten_audio(raw, speech.words, wav)

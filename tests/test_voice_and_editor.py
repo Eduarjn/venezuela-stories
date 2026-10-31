@@ -30,13 +30,17 @@ from video_editor import (  # noqa: E402
     transition_for,
 )
 from voice_engine import (  # noqa: E402
+    LEAD_SECONDS,
     MAX_GAP_SECONDS,
+    TAIL_SECONDS,
     Speech,
     VoiceEngine,
     VoiceEngineError,
     Word,
     plan_segments,
+    pronunciation_text,
     remap_words,
+    restore_spelling,
     words_from_characters,
 )
 
@@ -92,11 +96,31 @@ class VoiceUnitTest(unittest.TestCase):
     def test_long_pauses_become_max_gap(self):
         words = [Word("a", 0.5, 0.9), Word("b", 1.7, 2.1), Word("c", 2.2, 2.6)]
         segments = plan_segments(words, 3.2)
-        self.assertEqual(segments, [(0.46, 0.9 + MAX_GAP_SECONDS / 2), (1.7 - MAX_GAP_SECONDS / 2, 2.72)])
+        self.assertEqual(segments, [(0.5 - LEAD_SECONDS, 0.9 + MAX_GAP_SECONDS / 2),
+                                    (1.7 - MAX_GAP_SECONDS / 2, 2.6 + TAIL_SECONDS)])
         remapped = remap_words(words, segments)
         gap = remapped[1].start - remapped[0].end
         self.assertAlmostEqual(gap, MAX_GAP_SECONDS, places=3)
-        self.assertAlmostEqual(remapped[0].start, 0.04, places=3)
+        self.assertAlmostEqual(remapped[0].start, LEAD_SECONDS, places=3)
+
+    def test_dramatic_pause_up_to_half_a_second_is_kept(self):
+        # Reticências viram pausa de ~0,45 s no TTS: antes eram cortadas para 0,25 s.
+        words = [Word("lago...", 0.0, 0.4), Word("e", 0.85, 1.0)]
+        self.assertEqual(len(plan_segments(words, 1.2)), 1)
+        self.assertGreaterEqual(MAX_GAP_SECONDS, 0.45)
+
+    def test_spanish_names_are_respelled_for_the_portuguese_voice_only(self):
+        spoken, restore = pronunciation_text(
+            "Conta-se que o almirante Padilla viu Los Llanos. Rómulo Betancourt e Hollywood.", "pt-BR")
+        self.assertEqual(spoken, "Conta-se que o almirante Padiya viu Los Yanos. Rómulo Betancur e Hollywood.")
+        self.assertEqual(restore, {"padiya": "Padilla", "yanos": "Llanos", "betancur": "Betancourt"})
+        self.assertEqual(pronunciation_text("El almirante Padilla", "es-419"), ("El almirante Padilla", {}))
+
+    def test_subtitle_words_get_the_original_spelling_back(self):
+        words = [Word("almirante", 0.0, 0.4), Word("Padiya", 0.4, 0.9)]
+        back = restore_spelling(words, {"padiya": "Padilla"})
+        self.assertEqual([w.text for w in back], ["almirante", "Padilla"])
+        self.assertEqual((back[1].start, back[1].end), (0.4, 0.9))
 
     def test_short_pauses_are_kept(self):
         words = [Word("a", 0.0, 0.4), Word("b", 0.5, 0.9)]
@@ -292,11 +316,12 @@ class EndToEndTest(unittest.TestCase):
         timeline = json.loads(self.timeline.read_text(encoding="utf-8"))
         for scene in timeline["scenes"]:
             words = scene["words"]
-            self.assertAlmostEqual(words[0]["start"], 0.04, places=2)
+            self.assertAlmostEqual(words[0]["start"], LEAD_SECONDS, places=2)
             gaps = [b["start"] - a["end"] for a, b in zip(words, words[1:])]
             self.assertLessEqual(max(gaps), MAX_GAP_SECONDS + 0.01)
-            # 3,2 s de áudio cru viram ~1,86 s
-            self.assertLess(scene["duration"], 2.0)
+            # 3,2 s de áudio cru: a pausa de 0,8 s cai para MAX_GAP e o silêncio das pontas some
+            expected = (0.4 + MAX_GAP_SECONDS / 2 + LEAD_SECONDS) + (0.9 + MAX_GAP_SECONDS / 2 + TAIL_SECONDS)
+            self.assertAlmostEqual(scene["duration"], expected, delta=0.03)
 
     def test_final_video_has_exact_duration_resolution_and_audio(self):
         info = json.loads(self.probe("-show_entries", "stream=codec_type,width,height,r_frame_rate",
