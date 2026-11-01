@@ -1,13 +1,16 @@
 """Kit para publicar: a legenda pronta de cada rede e a capa do vídeo.
 
 postar.txt: TikTok, Instagram Reels e YouTube Shorts, cada seção pronta para colar. Os
-créditos obrigatórios das imagens vão sempre; quando falta espaço, saem hashtags e depois
-o fim da descrição, nunca os créditos.
+créditos obrigatórios das imagens vão sempre. Na legenda (2.200 caracteres) vai o crédito
+compacto: autor e licença de cada foto, a fonte e o link de cada licença, o que a CC BY
+aceita como "forma razoável para o meio". A lista completa (título e link de cada foto)
+vai na descrição do YouTube, que tem 5.000 caracteres, e fica no post_copy.txt.
 capa.jpg: a imagem da 1ª cena com o título, para a capa do Reels e a miniatura.
 """
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from pathlib import Path
 
@@ -15,8 +18,10 @@ CAPTION_MAX = 2200          # Instagram; o TikTok aceita 4.000 no app, mas só 2
 INSTAGRAM_MAX_HASHTAGS = 5  # o Instagram passou a aceitar no máximo 5 por post/Reel (dez/2025)
 TIKTOK_MAX_HASHTAGS = 5
 YOUTUBE_TITLE_MAX = 100
+YOUTUBE_DESCRIPTION_MAX = 5000
 YOUTUBE_HASHTAGS = 3        # o YouTube mostra as 3 primeiras acima do título
 CREDIT_NOTE = "Créditos (a licença exige): imagens de acervos livres, recortadas e animadas para o vídeo."
+SOURCE_NAMES = {"wikimedia": "do Wikimedia Commons", "pexels": "da Pexels"}
 
 COVER_SIZE = (1080, 1920)
 COVER_TEXT_WIDTH = 940
@@ -34,8 +39,26 @@ def _hashtags(episode: dict, limit: int) -> list[str]:
     return list(dict.fromkeys(tags))[:limit]
 
 
-def _credits(required: list[str]) -> str:
-    return "\n".join([CREDIT_NOTE, *(f"- {c}" for c in required)]) if required else ""
+def _author(name: str) -> str:
+    # O Commons às vezes repete o autor ("Unknown author Unknown author").
+    return re.sub(r"^(.+?) \1$", r"\1", name.strip()) or "autor desconhecido"
+
+
+def full_credits(items: list) -> str:
+    """Um crédito por linha: título, autor, licença com link e página de cada foto."""
+    return "\n".join([CREDIT_NOTE, *(f"- {c.credit_line()}" for c in items)]) if items else ""
+
+
+def compact_credits(items: list) -> str:
+    """Crédito curto para a legenda: cada autor com a licença, a fonte e o link das licenças."""
+    if not items:
+        return ""
+    authors = list(dict.fromkeys(f"{_author(c.author)} ({c.license})" for c in items))
+    sources = list(dict.fromkeys(SOURCE_NAMES.get(c.source, c.source) for c in items))
+    links = list(dict.fromkeys(c.license_link() for c in items if c.license_link()))
+    text = (f"Créditos (a licença exige): imagens {' e '.join(sources)}, recortadas e animadas para o "
+            f"vídeo. Autores: {'; '.join(authors)}.")
+    return text + (f" Licenças: {' · '.join(links)}" if links else "")
 
 
 def caption(title: str, description: str, tags: list[str], credits: str, limit: int = CAPTION_MAX) -> str:
@@ -60,34 +83,50 @@ def short_title(title: str, limit: int = YOUTUBE_TITLE_MAX) -> str:
     return cut.rstrip(" ,.;:") + "…"
 
 
-def build_ready_posts(episode: dict, required_credits: list[str]) -> str:
-    """Conteúdo do postar.txt: uma seção por rede, pronta para colar."""
+def youtube_description(description: str, items: list, sources: str, tags: list[str]) -> str:
+    """Descrição do Shorts: a lista completa de créditos quando cabe; senão a compacta. As
+    fontes saem antes dos créditos se faltar espaço."""
+    for credits, with_sources in ((full_credits(items), True), (full_credits(items), False),
+                                  (compact_credits(items), True), (compact_credits(items), False)):
+        text = "\n\n".join(p for p in (description, credits, sources if with_sources else "",
+                                       " ".join(tags)) if p)
+        if len(text) <= YOUTUBE_DESCRIPTION_MAX:
+            return text
+    return text
+
+
+def build_ready_posts(episode: dict, credit_items: list) -> str:
+    """Conteúdo do postar.txt: uma seção por rede, pronta para colar. credit_items: as
+    imagens que a licença obriga a creditar (image_sources.Candidate)."""
     title = (episode.get("post_title") or "").strip()
     description = (episode.get("post_description") or "").strip()
-    credits = _credits(required_credits)
+    credits = compact_credits(credit_items)
     sources = ""
     if episode.get("track") == "fact" and episode.get("sources"):
         sources = "Fontes:\n" + "\n".join(f"- {s.get('title', '')}: {s['url']}" for s in episode["sources"])
-    youtube_description = "\n\n".join(p for p in (
-        description, credits, sources, " ".join(_hashtags(episode, YOUTUBE_HASHTAGS))) if p)
+    tiktok = caption(title, description, _hashtags(episode, TIKTOK_MAX_HASHTAGS), credits)
+    instagram = caption(title, description, _hashtags(episode, INSTAGRAM_MAX_HASHTAGS), credits)
+    too_long = [name for name, text in (("TikTok", tiktok), ("Instagram", instagram)) if len(text) > CAPTION_MAX]
     lines = [
         "=== ANTES DE POSTAR ===",
         "- Capa: capa.jpg (nesta pasta). No Instagram: Editar capa > Adicionar da galeria. Onde não der "
         "para enviar a imagem, escolha o quadro de capa no início do vídeo.",
         "- A narração é voz sintética: ative o rótulo de conteúdo gerado por IA se a rede pedir.",
+        *([f"- ATENÇÃO: a legenda do {' e do '.join(too_long)} passou de {CAPTION_MAX} caracteres; "
+           "corte a descrição (nunca os créditos)."] if too_long else []),
         "",
         "=== TIKTOK (cole tudo na legenda) ===",
-        caption(title, description, _hashtags(episode, TIKTOK_MAX_HASHTAGS), credits),
+        tiktok,
         "",
         f"=== INSTAGRAM REELS (cole tudo na legenda; o Instagram aceita até {INSTAGRAM_MAX_HASHTAGS} hashtags) ===",
-        caption(title, description, _hashtags(episode, INSTAGRAM_MAX_HASHTAGS), credits),
+        instagram,
         "",
         "=== YOUTUBE SHORTS ===",
         "Título:",
         short_title(title),
         "",
         "Descrição:",
-        youtube_description,
+        youtube_description(description, credit_items, sources, _hashtags(episode, YOUTUBE_HASHTAGS)),
         "",
         "=== DEPOIS DE PUBLICAR ===",
         f"python main.py --mark-published {episode.get('date', '')}",

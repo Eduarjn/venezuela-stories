@@ -7,10 +7,12 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from image_sources import Candidate  # noqa: E402
 from publicacao import (  # noqa: E402
     CAPTION_MAX,
     build_ready_posts,
     caption,
+    compact_credits,
     cover_text,
     find_font,
     make_cover,
@@ -24,8 +26,12 @@ EPISODE = {
     "hashtags": ["#venezuela", "#catatumbo", "raios", "#curiosidades", "#historia", "#lago", "#ciencia", "#natureza"],
     "sources": [{"title": "NASA", "url": "https://nasa.gov/x"}],
 }
-CREDITS = ['Imagem: "Catatumbo" — Fernando Flores — CC BY 3.0 (https://cc/by/3.0) — https://commons/x',
-           'Imagem: "Ponte" — Autor — CC BY 4.0 (https://cc/by/4.0) — https://commons/y']
+def photo(title, author, license, link):
+    return Candidate("wikimedia", "d", f"https://commons/{title}", title, author, license, link, 1000, 800, True)
+
+
+CREDITS = [photo("Catatumbo", "Fernando Flores", "CC BY 3.0", "https://cc/by/3.0"),
+           photo("Ponte", "Ana Souza", "CC BY 4.0", "https://cc/by/4.0")]
 
 
 def section(text: str, name: str) -> str:
@@ -37,9 +43,11 @@ class ReadyPostsTest(unittest.TestCase):
         text = build_ready_posts(EPISODE, CREDITS)
         tiktok, instagram = section(text, "TIKTOK"), section(text, "INSTAGRAM")
         youtube = section(text, "YOUTUBE")
-        for part in (tiktok, instagram, youtube):
-            self.assertIn("Fernando Flores", part)
-            self.assertIn("CC BY 4.0", part)
+        for part in (tiktok, instagram):  # crédito compacto: autor, licença e link da licença
+            self.assertIn("Autores: Fernando Flores (CC BY 3.0); Ana Souza (CC BY 4.0).", part)
+            self.assertIn("https://cc/by/3.0 · https://cc/by/4.0", part)
+            self.assertIn("Wikimedia Commons", part)
+        self.assertIn('Imagem: "Catatumbo" — Fernando Flores — CC BY 3.0', youtube)  # lista completa
         self.assertIn("O lago onde o céu explode", tiktok)
         self.assertEqual(instagram.count("#"), 5)  # o Instagram aceita no máximo 5 hashtags
         self.assertIn("#raios", instagram)          # hashtag sem # no roteiro ganha o #
@@ -48,11 +56,24 @@ class ReadyPostsTest(unittest.TestCase):
         self.assertIn("--mark-published 2026-11-01", text)
 
     def test_long_text_drops_hashtags_then_description_but_never_credits(self):
-        text = caption("Título", "x" * 3000, ["#a", "#b"], "\n".join(CREDITS))
+        credits = compact_credits(CREDITS)
+        text = caption("Título", "x" * 3000, ["#a", "#b"], credits)
         self.assertLessEqual(len(text), CAPTION_MAX)
-        self.assertTrue(text.endswith(CREDITS[1]))
+        self.assertTrue(text.endswith(credits))
         self.assertNotIn("#a", text)
         self.assertIn("x…", text)
+
+    def test_twenty_cc_by_photos_still_fit_the_caption_with_the_whole_description(self):
+        # Caso real (30/10): 20 fotos CC BY de 11 autores; a lista completa passa de 3.900 caracteres.
+        items = [photo(f"Foto {i}", f"Autor {i % 11}", "CC BY 3.0", "https://creativecommons.org/licenses/by/3.0")
+                 for i in range(20)]
+        text = build_ready_posts(EPISODE, items)
+        instagram = section(text, "INSTAGRAM")
+        self.assertLessEqual(len(instagram.strip().split("\n", 1)[1]), CAPTION_MAX)
+        self.assertIn(EPISODE["post_description"], instagram)
+        self.assertEqual(instagram.count("Autor 3 (CC BY 3.0)"), 1)
+        self.assertNotIn("ATENÇÃO", text)
+        self.assertIn('Imagem: "Foto 19"', section(text, "YOUTUBE"))  # cabe nos 5.000 do YouTube
 
     def test_youtube_title_is_cut_at_a_word(self):
         title = short_title("palavra " * 20)

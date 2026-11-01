@@ -215,6 +215,7 @@ class ImageCredits:
     optional: list[str] = field(default_factory=list)  # domínio público, CC0, Pexels: cortesia
     reused_scenes: int = 0                              # cenas que repetem a imagem de outra
     by_scene: dict[int, str] = field(default_factory=dict)  # cena -> imagem, para a revisão
+    required_items: list = field(default_factory=list)  # as mesmas de required, como Candidate
 
 
 def build_post_copy(episode: dict, credits: ImageCredits | None = None) -> str:
@@ -330,6 +331,8 @@ def load_image_credits(episode: dict) -> ImageCredits:
         target = credits.required if candidate.attribution_required else credits.optional
         if candidate.credit_line() not in target:
             target.append(candidate.credit_line())
+            if candidate.attribution_required:
+                credits.required_items.append(candidate)
 
     path = visuals / "credits.json"
     for sid, entry in (json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}).items():
@@ -464,7 +467,8 @@ def write_post_copy(day: date, episode: dict) -> Path:
     episode = {**episode, "date": day.isoformat()}
     post_copy = day_dir(day) / "post_copy.txt"
     post_copy.write_text(build_post_copy(episode, credits), encoding="utf-8")
-    (day_dir(day) / "postar.txt").write_text(build_ready_posts(episode, credits.required), encoding="utf-8")
+    (day_dir(day) / "postar.txt").write_text(build_ready_posts(episode, credits.required_items),
+                                             encoding="utf-8")
     image = episodes_dir() / str(episode.get("topic_id")) / "visuals" / "scene_01.png"
     if image.exists():
         try:
