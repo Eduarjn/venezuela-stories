@@ -18,6 +18,7 @@ from image_sources import (  # noqa: E402
     WikimediaSource,
     classify_license,
     scene_queries,
+    wikimedia_video,
 )
 from visual_generator import VisualGenerator, VisualGeneratorError, fit_vertical  # noqa: E402
 
@@ -107,6 +108,46 @@ class WikimediaTest(unittest.TestCase):
         response = commons_response(commons_page(1, "SA", "cc-by-sa-4.0", "CC BY-SA 4.0"))
         self.assertEqual(self.source(response).search("x"), [])
         self.assertEqual(len(self.source(response, allow_share_alike=True).search("x")), 1)
+
+
+class WikimediaVideoTest(unittest.TestCase):
+    TITLE = 'File:Catatumbo "raios" (CIRA).webm'
+
+    def api(self, license_code="pd", short="Public domain", mime="video/webm"):
+        def get_json(url, params, headers):
+            self.assertEqual(params["titles"], self.TITLE)
+            self.assertIn("derivatives", params["viprop"])
+            return {"query": {"pages": [{"title": self.TITLE, "videoinfo": [{
+                "url": "https://upload.wikimedia.org/c/Cat.webm?utm_source=commons",
+                "descriptionurl": "https://commons.wikimedia.org/wiki/File:Cat.webm",
+                "width": 1440, "height": 1080, "mime": mime,
+                "extmetadata": {"License": {"value": license_code}, "LicenseShortName": {"value": short},
+                                "Artist": {"value": "<a href='x'>GOES: CIRA &amp; NOAA</a>"}},
+                "derivatives": [{"src": "https://u/t/Cat.webm.480p.vp9.webm", "height": 480},
+                                {"src": "https://u/t/Cat.webm.2160p.vp9.webm", "height": 2160},
+                                {"src": "https://u/t/Cat.webm.1080p.vp9.webm", "height": 1080}],
+            }]}]}}
+        return get_json
+
+    def test_page_link_gives_credit_and_original_first_then_converted_versions(self):
+        link = "https://commons.wikimedia.org/wiki/File:Catatumbo_%22raios%22_(CIRA).webm?uselang=pt"
+        candidate, urls = wikimedia_video(link, get_json=self.api())
+        self.assertEqual(urls, ["https://upload.wikimedia.org/c/Cat.webm",  # sem o ?utm_source
+                                "https://u/t/Cat.webm.1080p.vp9.webm", "https://u/t/Cat.webm.480p.vp9.webm"])
+        self.assertEqual(candidate.kind, "Vídeo")
+        self.assertFalse(candidate.attribution_required)
+        self.assertEqual(candidate.credit_line(), 'Vídeo: "Catatumbo "raios" (CIRA)" — GOES: CIRA & NOAA — '
+                                                  "Public domain — https://commons.wikimedia.org/wiki/File:Cat.webm")
+
+    def test_same_license_rules_as_images(self):
+        with self.assertRaises(ValueError):  # CC BY-SA sem ALLOW_SHARE_ALIKE
+            wikimedia_video(self.TITLE, get_json=self.api("cc-by-sa-4.0", "CC BY-SA 4.0"))
+        candidate, _ = wikimedia_video(self.TITLE, True, get_json=self.api("cc-by-sa-4.0", "CC BY-SA 4.0"))
+        self.assertTrue(candidate.attribution_required)
+        with self.assertRaises(ValueError):  # não comercial nunca
+            wikimedia_video(self.TITLE, True, get_json=self.api("cc-by-nc-4.0", "CC BY-NC 4.0"))
+        with self.assertRaises(ValueError):  # foto não é filmagem
+            wikimedia_video(self.TITLE, get_json=self.api(mime="image/jpeg"))
 
 
 class PexelsTest(unittest.TestCase):

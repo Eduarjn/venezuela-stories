@@ -284,6 +284,51 @@ class EditorUnitTest(unittest.TestCase):
             self.assertNotEqual(rendered[0], rendered[1])
             self.assertEqual([p.name for p in work.glob("clip_*.mp4")], [rendered[1]])
 
+    def test_real_footage_scenes_continue_the_same_video_without_a_cut(self):
+        from unittest import mock
+
+        import video_editor
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "out" / DAY.isoformat()).mkdir(parents=True)
+            scenes = [{"scene_id": i, "narration_text": "Um dois", "motion_type": "slow_ken_burns",
+                       "sfx_cue": "thunder"} for i in (1, 2, 3)]
+            (root / "out" / DAY.isoformat() / "current_episode.json").write_text(
+                json.dumps({"topic_id": 7, "scenes": scenes}), encoding="utf-8")
+            base = root / "episodes" / "7"
+            (base / "audio").mkdir(parents=True)
+            (base / "visuals").mkdir()
+            words = [{"text": "Um", "start": 0.0, "end": 0.4}, {"text": "dois", "start": 0.5, "end": 0.9}]
+            (base / "audio" / "timeline.json").write_text(json.dumps({"scenes": [
+                {"scene_id": i, "audio": f"scene_{i:02d}.wav", "duration": 2.0, "words": words}
+                for i in (1, 2, 3)]}), encoding="utf-8")
+            for i in (1, 2, 3):
+                (base / "visuals" / f"scene_{i:02d}.png").write_bytes(b"png")
+            (base / "visuals" / "v.webm").write_bytes(b"filmagem")
+            (base / "visuals" / "videos.json").write_text(json.dumps({
+                "2": {"file": "v.webm", "start": 1.5}, "3": {"file": "v.webm"}}), encoding="utf-8")
+            with mock.patch.object(video_editor.shutil, "which", return_value="ffmpeg"):
+                editor = VideoEditor(output_dir=root / "out", episodes_dir=root / "episodes",
+                                     assets_dir=root)
+                _, plans, work = editor.plan(DAY)
+                self.assertIsNone(plans[0].video)
+                self.assertEqual((plans[1].video.name, plans[1].video_start, plans[1].transition),
+                                 ("v.webm", 1.5, "flash"))
+                # A cena 3 continua do ponto onde a 2 parou, sem flash no meio da filmagem.
+                self.assertEqual((plans[2].video_start, plans[2].transition), (1.5 + plans[1].duration, None))
+
+                rendered = []
+                with mock.patch.object(video_editor, "render_video_clip",
+                                       side_effect=lambda v, s, d, out, transition=None: (
+                                           rendered.append((v.name, s)), out.write_bytes(b"c"))), \
+                        mock.patch.object(video_editor, "render_clip",
+                                          side_effect=lambda *a, **k: a[3].write_bytes(b"c")), \
+                        mock.patch.object(video_editor, "_run"):
+                    work.mkdir(parents=True)
+                    editor.render_scenes(plans, work)
+                self.assertEqual(rendered, [("v.webm", 1.5), ("v.webm", 1.5 + plans[1].duration)])
+
 
 # --------------------------------------------------------------------------- ponta a ponta
 
@@ -363,6 +408,21 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual([s["transition"] for s in render["scenes"]], [None, "whip", "flash"])
         for scene in render["scenes"]:
             self.assertEqual(scene["frames"], round(scene["duration"] * 30))
+
+    def test_real_footage_clip_is_vertical_with_exact_frames_even_past_the_end(self):
+        from visual_generator import render_video_clip
+
+        footage = Path(self.tmp.name) / "filmagem.mp4"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                        "testsrc=size=320x240:rate=25:duration=2", str(footage)], check=True)
+        for start in (0.5, 1.5):  # 1.5 + 1.0 passa do fim: o último quadro fica parado
+            clip = Path(self.tmp.name) / f"real_{start}.mp4"
+            render_video_clip(footage, start, 1.0, clip, transition="flash")
+            info = json.loads(subprocess.run(
+                ["ffprobe", "-v", "error", "-count_frames", "-show_entries",
+                 "stream=width,height,nb_read_frames", "-of", "json", str(clip)],
+                capture_output=True, text=True, check=True).stdout)["streams"][0]
+            self.assertEqual((info["width"], info["height"], int(info["nb_read_frames"])), (1080, 1920, 30))
 
     def test_subtitle_is_burned_in_yellow_at_eye_level(self):
         timeline = json.loads(self.timeline.read_text(encoding="utf-8"))

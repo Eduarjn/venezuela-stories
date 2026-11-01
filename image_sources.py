@@ -17,6 +17,7 @@ import os
 import re
 from dataclasses import asdict, dataclass
 from typing import Callable
+from urllib.parse import unquote
 
 log = logging.getLogger("image_sources")
 
@@ -40,6 +41,7 @@ class Candidate:
     width: int
     height: int
     attribution_required: bool
+    kind: str = "Imagem"   # "Imagem" ou "Vídeo" (filmagem real numa cena)
 
     def license_link(self) -> str:
         """URL da licença: CC BY (2.0, 3.0 e 4.0) exige o link, não só o nome."""
@@ -56,7 +58,7 @@ class Candidate:
         license = self.license
         if self.attribution_required and self.license_link():
             license += f" ({self.license_link()})"
-        return f"Imagem: \"{self.title}\" — {author} — {license} — {self.page_url}"
+        return f"{self.kind}: \"{self.title}\" — {author} — {license} — {self.page_url}"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -226,9 +228,62 @@ def region_from_env() -> str:
     return os.getenv("IMAGE_REGION", "Venezuela").strip()
 
 
+def share_alike_allowed() -> bool:
+    return os.getenv("ALLOW_SHARE_ALIKE", "0").strip().lower() in ("1", "true", "sim", "yes")
+
+
+def wikimedia_video(ref: str, allow_share_alike: bool = False,
+                    get_json: Callable[[str, dict, dict], dict] = _get_json) -> tuple[Candidate, list[str]]:
+    """Filmagem real do Wikimedia Commons, pelo nome ("File:X.webm") ou pelo link da página.
+
+    Devolve o crédito e as URLs para baixar, da melhor para a pior: o original primeiro (o
+    Commons costuma limitar originais com 429) e depois as versões convertidas até 1080p.
+    Mesma regra de licença das imagens: nada de NC/ND; CC BY-SA só com allow_share_alike.
+    """
+    name = ref.split("/wiki/", 1)[-1].split("?", 1)[0].split("#", 1)[0]
+    title = unquote(name).replace("_", " ").strip()
+    if not title.lower().startswith("file:"):
+        title = f"File:{title}"
+    data = get_json(WikimediaSource.API, {
+        "action": "query", "format": "json", "formatversion": "2", "titles": title,
+        "prop": "videoinfo", "viprop": "url|size|mime|extmetadata|derivatives",
+    }, {})
+    page = ((data.get("query") or {}).get("pages") or [{}])[0]
+    info = (page.get("videoinfo") or [None])[0]
+    if not info:
+        raise ValueError(f"{title}: arquivo não encontrado no Wikimedia Commons")
+    if not str(info.get("mime", "")).startswith("video/"):
+        raise ValueError(f"{title}: não é vídeo ({info.get('mime')})")
+    meta = info.get("extmetadata") or {}
+    value = lambda key: (meta.get(key) or {}).get("value") or ""  # noqa: E731
+    kind = classify_license(value("License"), value("LicenseShortName"))
+    if kind is None:
+        raise ValueError(f"{title}: licença não permite uso ({value('LicenseShortName') or 'sem licença'})")
+    if kind == "by-sa" and not allow_share_alike:
+        raise ValueError(f"{title}: licença CC BY-SA; só com ALLOW_SHARE_ALIKE=1 no .env")
+    converted = sorted((d for d in info.get("derivatives") or []
+                        if d.get("src") and 0 < int(d.get("height") or 0) <= 1080),
+                       key=lambda d: int(d.get("height") or 0), reverse=True)
+    urls = list(dict.fromkeys(u.split("?", 1)[0] for u in [info.get("url") or ""] + [d["src"] for d in converted]
+                              if u))
+    candidate = Candidate(
+        source="wikimedia",
+        download_url=urls[0],
+        page_url=info.get("descriptionurl") or "",
+        title=re.sub(r"^File:|\.[a-zA-Z0-9]+$", "", page.get("title") or title).strip(),
+        author=_strip_html(value("Artist")) or _strip_html(value("Credit")),
+        license=value("LicenseShortName") or ("Public domain" if kind == "pd" else kind.upper()),
+        license_url=value("LicenseUrl"),
+        width=int(info.get("width") or 0),
+        height=int(info.get("height") or 0),
+        attribution_required=kind != "pd",
+        kind="Vídeo",
+    )
+    return candidate, urls
+
+
 def sources_from_env() -> list:
-    allow_sa = os.getenv("ALLOW_SHARE_ALIKE", "0").strip().lower() in ("1", "true", "sim", "yes")
-    sources: list = [WikimediaSource(allow_share_alike=allow_sa)]
+    sources: list = [WikimediaSource(allow_share_alike=share_alike_allowed())]
     key = os.getenv("PEXELS_API_KEY", "").strip()
     if key:
         sources.append(PexelsSource(key))

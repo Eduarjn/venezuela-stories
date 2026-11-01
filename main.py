@@ -314,23 +314,37 @@ def step_voice(day: date) -> None:
 
 
 def load_image_credits(episode: dict) -> ImageCredits:
-    """Créditos únicos das imagens reais usadas no episódio (visuals/credits.json)."""
+    """Créditos únicos das imagens e filmagens reais usadas no episódio
+    (visuals/credits.json e visuals/videos.json)."""
+    from dataclasses import fields
+
     from image_sources import Candidate
+    from video_editor import load_scene_videos
 
     credits = ImageCredits()
-    path = episodes_dir() / str(episode.get("topic_id")) / "visuals" / "credits.json"
-    if not path.exists():
-        return credits
-    for sid, entry in json.loads(path.read_text(encoding="utf-8")).items():
+    visuals = episodes_dir() / str(episode.get("topic_id")) / "visuals"
+    videos = load_scene_videos(visuals)
+
+    def add(sid: int, candidate: Candidate, label: str) -> None:
+        credits.by_scene[sid] = label
+        target = credits.required if candidate.attribution_required else credits.optional
+        if candidate.credit_line() not in target:
+            target.append(candidate.credit_line())
+
+    path = visuals / "credits.json"
+    for sid, entry in (json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}).items():
+        if int(sid) in videos:  # a cena mostra a filmagem, não a imagem
+            continue
         if "source" not in entry:  # cena que reaproveitou a imagem de outra
             credits.reused_scenes += 1
             credits.by_scene[int(sid)] = f"(repete a imagem da cena {entry.get('reused_from_scene')})"
             continue
         candidate = Candidate(**entry)
-        credits.by_scene[int(sid)] = f"{candidate.title} ({candidate.source})"
-        target = credits.required if candidate.attribution_required else credits.optional
-        if candidate.credit_line() not in target:
-            target.append(candidate.credit_line())
+        add(int(sid), candidate, f"{candidate.title} ({candidate.source})")
+    known = {f.name for f in fields(Candidate)}
+    for sid, entry in sorted(videos.items()):
+        candidate = Candidate(**{k: v for k, v in entry.items() if k in known})
+        add(sid, candidate, f"FILMAGEM REAL: {candidate.title} ({candidate.source})")
     return credits
 
 
@@ -381,6 +395,65 @@ def redo_voice(day: date, scenes: list[int] | None = None) -> None:
             (audio / name).unlink(missing_ok=True)
     _reset_steps(day, ("voice", "edit"))
     log.info("Narração de %s apagada; voice e edit vão rodar de novo", day)
+
+
+def attach_real_video(day: date, ref: str, scenes: list[int], start: float = 0.0,
+                      find: Callable | None = None, fetch: Callable[[str], bytes] | None = None) -> Path:
+    """Põe uma filmagem real do Wikimedia Commons (licença livre) nas cenas indicadas, em
+    sequência: a 1ª começa no segundo `start` da filmagem e as outras continuam sem corte.
+    A imagem da cena continua guardada; --tirar-video volta a usá-la. Só o edit roda de novo."""
+    import hashlib
+
+    from image_sources import download, share_alike_allowed, wikimedia_video
+
+    if not scenes:
+        raise PipelineError("diga em quais cenas entra a filmagem, ex.: --cenas 3 4")
+    episode = _episode_to_redo(day, scenes)
+    order = [s["scene_id"] for s in episode["scenes"]]
+    first = order.index(scenes[0])
+    if order[first:first + len(scenes)] != list(scenes):
+        raise PipelineError("as cenas da filmagem precisam ser seguidas e em ordem, ex.: --cenas 3 4")
+    try:
+        candidate, urls = (find or wikimedia_video)(ref, share_alike_allowed())
+    except ValueError as exc:
+        raise PipelineError(str(exc)) from exc
+    data, errors = None, []
+    for url in urls:  # o original costuma dar 429; as versões convertidas vêm em seguida
+        try:
+            data = (fetch or download)(url)
+            break
+        except Exception as exc:  # noqa: BLE001 - tenta a próxima versão
+            errors.append(f"{url.rsplit('/', 1)[-1][-40:]}: {exc}")
+    if data is None:
+        raise PipelineError("não consegui baixar a filmagem: " + "; ".join(errors or ["sem URL"]))
+    visuals = episodes_dir() / str(episode.get("topic_id")) / "visuals"
+    visuals.mkdir(parents=True, exist_ok=True)
+    path = visuals / f"video_{hashlib.sha1(data).hexdigest()[:10]}{Path(url).suffix.lower() or '.webm'}"
+    path.write_bytes(data)
+    candidate.download_url = url
+    videos_path = visuals / "videos.json"
+    videos = json.loads(videos_path.read_text(encoding="utf-8")) if videos_path.exists() else {}
+    for i, sid in enumerate(scenes):
+        videos[str(sid)] = {"file": path.name, **({"start": start} if i == 0 else {}), **candidate.to_dict()}
+    videos_path.write_text(json.dumps(videos, ensure_ascii=False, indent=2), encoding="utf-8")
+    _reset_steps(day, ("edit",))
+    log.info('Filmagem real "%s" nas cenas %s (%s); edit vai rodar de novo', candidate.title,
+             scenes, candidate.license)
+    return path
+
+
+def remove_real_video(day: date, scenes: list[int]) -> None:
+    """Tira a filmagem real das cenas: elas voltam a mostrar a imagem."""
+    episode = _episode_to_redo(day, scenes)
+    path = episodes_dir() / str(episode.get("topic_id")) / "visuals" / "videos.json"
+    videos = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    for sid in scenes:
+        videos.pop(str(sid), None)
+    if videos:
+        path.write_text(json.dumps(videos, ensure_ascii=False, indent=2), encoding="utf-8")
+    else:
+        path.unlink(missing_ok=True)
+    _reset_steps(day, ("edit",))
 
 
 def write_post_copy(day: date, episode: dict) -> Path:
@@ -548,7 +621,17 @@ def main(argv: list[str] | None = None) -> int:
                              "(o banco continua impedindo tema repetido)")
     parser.add_argument("--post-copy", action="store_true",
                         help="só refaz o post_copy.txt do dia (sem renderizar o vídeo)")
+    parser.add_argument("--video-real", metavar="ARQUIVO",
+                        help="filmagem real do Wikimedia Commons (link ou nome do arquivo) nas cenas de "
+                             '--cenas, em sequência e sem corte. Ex.: --video-real "File:X.webm" --cenas 3 4')
+    parser.add_argument("--cenas", nargs="+", type=int, metavar="CENA", help="cenas da --video-real")
+    parser.add_argument("--inicio", type=float, default=0.0, metavar="SEG",
+                        help="segundo da filmagem onde a 1ª cena começa (padrão: 0)")
+    parser.add_argument("--tirar-video", nargs="+", type=int, metavar="CENA",
+                        help="tira a filmagem real dessas cenas (voltam a mostrar a imagem)")
     args = parser.parse_args(argv)
+    if args.video_real and not args.cenas:
+        parser.error("--video-real precisa de --cenas, ex.: --cenas 3 4")
     setup_logging(args.date)
 
     if args.check:
@@ -591,6 +674,10 @@ def main(argv: list[str] | None = None) -> int:
                 redo_images(args.date, args.redo_images or None)
             if args.redo_voice is not None:
                 redo_voice(args.date, args.redo_voice or None)
+            if args.video_real:
+                attach_real_video(args.date, args.video_real, args.cenas, args.inicio)
+            if args.tirar_video:
+                remove_real_video(args.date, args.tirar_video)
             cp = run_pipeline(args.date, topic=args.tema)
     except PipelineError as exc:
         log.error("%s", exc)

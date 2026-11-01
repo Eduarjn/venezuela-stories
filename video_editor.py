@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from visual_generator import FPS, HEIGHT, WIDTH, render_clip
+from visual_generator import FPS, HEIGHT, WIDTH, render_clip, render_video_clip
 
 log = logging.getLogger("video_editor")
 
@@ -120,10 +120,20 @@ class ScenePlan:
     frames: int
     start: float          # início da cena no vídeo final (s)
     words: list[TimedWord]  # tempo absoluto no vídeo final
+    video: Path | None = None  # filmagem real no lugar da imagem (visuals/videos.json)
+    video_start: float = 0.0   # segundo da filmagem onde a cena começa
 
     @property
     def duration(self) -> float:
         return self.frames / FPS
+
+
+def load_scene_videos(visuals: Path) -> dict[int, dict]:
+    """Cenas com filmagem real: {cena: {"file": ..., "start"?: s, crédito...}} de videos.json."""
+    path = visuals / "videos.json"
+    if not path.exists():
+        return {}
+    return {int(sid): entry for sid, entry in json.loads(path.read_text(encoding="utf-8")).items()}
 
 
 # --------------------------------------------------------------------------- utilidades
@@ -417,6 +427,8 @@ class VideoEditor:
 
         plans: list[ScenePlan] = []
         cursor = 0.0
+        videos = load_scene_videos(base / "visuals")
+        previous_file, previous_end = None, 0.0  # filmagem da cena anterior, para continuar
         for index, scene in enumerate(episode["scenes"]):
             sid = scene["scene_id"]
             image = base / "visuals" / f"scene_{sid:02d}.png"
@@ -430,9 +442,22 @@ class VideoEditor:
             words = mark_sentence_ends(
                 [TimedWord(w["text"], cursor + w["start"], cursor + w["end"]) for w in voice["words"]],
                 scene.get("narration_text", ""))
+            transition = transition_for(index, scene["sfx_cue"])
+            video, video_start = None, 0.0
+            entry = videos.get(sid)
+            if entry:
+                video = base / "visuals" / entry["file"]
+                if not video.exists():
+                    raise VideoEditorError(f"{video} não existe (visuals/videos.json, cena {sid})")
+                if "start" in entry:
+                    video_start = float(entry["start"])
+                elif entry["file"] == previous_file:  # continua a filmagem da cena anterior, sem corte
+                    video_start, transition = previous_end, None
+            previous_file = entry["file"] if entry else None
+            previous_end = video_start + frames / FPS
             plans.append(ScenePlan(sid, image, base / "audio" / voice["audio"], scene["motion_type"],
-                                   scene["sfx_cue"], transition_for(index, scene["sfx_cue"]),
-                                   frames, cursor, words))
+                                   scene["sfx_cue"], transition, frames, cursor, words,
+                                   video, video_start))
             cursor += frames / FPS
         return episode, plans, base / "edit"
 
@@ -442,13 +467,18 @@ class VideoEditor:
         """Clipe de cada cena com a duração exata; depois concatena sem recodificar."""
         clips = []
         for p in plans:
-            # O nome inclui o conteúdo da imagem: trocar a imagem (--redo-images) refaz o clipe.
-            digest = hashlib.sha1(p.image.read_bytes()).hexdigest()[:10]
+            # O nome inclui o conteúdo da imagem (ou da filmagem e o trecho): trocar refaz o clipe.
+            source = p.video.read_bytes() + f"@{p.video_start:.3f}".encode() if p.video else p.image.read_bytes()
+            digest = ("v" if p.video else "") + hashlib.sha1(source).hexdigest()[:10]
             clip = work / f"clip_{p.scene_id:02d}_{p.frames}f_{p.transition or 'cut'}_{digest}.mp4"
             if not clip.exists():
-                log.info("Cena %s: %.2fs, %s, transição %s", p.scene_id, p.duration, p.motion,
+                log.info("Cena %s: %.2fs, %s, transição %s", p.scene_id, p.duration,
+                         f"filmagem real a partir de {p.video_start:.2f}s" if p.video else p.motion,
                          p.transition or "corte seco")
-                render_clip(p.image, p.motion, p.duration, clip, transition=p.transition)
+                if p.video:
+                    render_video_clip(p.video, p.video_start, p.duration, clip, transition=p.transition)
+                else:
+                    render_clip(p.image, p.motion, p.duration, clip, transition=p.transition)
             clips.append(clip)
         for old in work.glob("clip_*.mp4"):  # clipes de imagens/durações que não valem mais
             if old not in clips:
@@ -547,7 +577,9 @@ class VideoEditor:
             "duration_seconds": round(sum(p.duration for p in plans), 3),
             "scenes": [{"scene_id": p.scene_id, "start": round(p.start, 3),
                         "duration": round(p.duration, 3), "frames": p.frames,
-                        "transition": p.transition, "sfx_cue": p.sfx_cue} for p in plans],
+                        "transition": p.transition, "sfx_cue": p.sfx_cue,
+                        **({"video": p.video.name, "video_start": round(p.video_start, 3)}
+                           if p.video else {})} for p in plans],
             "output": str(output),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         log.info("Vídeo pronto: %s", output)

@@ -230,6 +230,8 @@ python main.py --date 2026-11-05 --redo-images   # novas imagens e vídeo remont
 python main.py --date 2026-11-05 --redo-images 3 7   # troca só as cenas 3 e 7 (a imagem recusada não volta)
 python main.py --date 2026-11-05 --redo-voice 7      # depois de mudar o narration_text da cena 7
 python main.py --date 2026-11-05 --post-copy     # só refaz o post_copy.txt (sem renderizar)
+python main.py --date 2026-11-05 --video-real "<link do arquivo no Commons>" --cenas 3 4  # filmagem real nas cenas 3 e 4, sem corte
+python main.py --date 2026-11-05 --tirar-video 3 4   # as cenas voltam a mostrar a imagem
 ```
 
 Saída do dia: `output/AAAA-MM-DD_titulo-do-video.mp4` e `output/AAAA-MM-DD/post_copy.txt`

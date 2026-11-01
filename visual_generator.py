@@ -211,6 +211,52 @@ def render_clip(image: Path, motion: str, duration: float, output: Path,
     return output
 
 
+def video_clip_filter(start: float, duration: float, transition: str | None = None,
+                      width: int = WIDTH, height: int = HEIGHT) -> str:
+    """Filtro (-filter_complex, saída [v]) para um trecho de filmagem real numa cena.
+
+    Mesmo enquadramento das fotos horizontais (fit_vertical): o vídeo inteiro no terço
+    superior-central, sobre ele mesmo desfocado e escurecido, deixando a faixa das legendas
+    sobre o fundo. Sem movimento de câmera: a própria filmagem já se mexe. Se o vídeo acabar
+    antes da cena, o último quadro fica parado (o áudio nunca perde a sincronia).
+    """
+    if transition is not None and transition not in TRANSITIONS:
+        raise ValueError(f"transição desconhecida: {transition!r}")
+    chain = (
+        f"[0:v]trim=start={start:.3f},setpts=PTS-STARTPTS,fps={FPS},"
+        f"tpad=stop_mode=clone:stop_duration={duration:.3f},split[a][b];"
+        f"[a]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},"
+        "gblur=sigma=36,colorchannelmixer=rr=0.55:gg=0.55:bb=0.55[bg];"
+        f"[b]scale={width}:-2:flags=lanczos[fg];"
+        "[bg][fg]overlay=x=(W-w)/2:y='max(0,H*0.40-h/2)'"
+    )
+    if transition:
+        chain += "," + TRANSITIONS[transition]
+    return chain + "," + FINISH_FILTERS + "[v]"
+
+
+def render_video_clip(video: Path, start: float, duration: float, output: Path,
+                      ffmpeg: str = "ffmpeg", transition: str | None = None) -> Path:
+    """Clipe da cena feito de filmagem real (o trecho que começa em start), com a duração
+    exata da narração em frames inteiros, como render_clip."""
+    if shutil.which(ffmpeg) is None:
+        raise VisualGeneratorError("FFmpeg não encontrado. Instale e confira com: ffmpeg -version")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    frames = max(1, round(duration * FPS))
+    cmd = [
+        ffmpeg, "-y", "-loglevel", "error", "-i", str(video),
+        "-filter_complex", video_clip_filter(start, duration, transition), "-map", "[v]",
+        "-frames:v", str(frames), "-r", str(FPS),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-pix_fmt", "yuv420p", "-an",
+        str(output),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise VisualGeneratorError(f"FFmpeg falhou em {video.name}: {result.stderr.strip()[-500:]}")
+    return output
+
+
 def estimate_duration(narration: str) -> float:
     words = len(narration.split())
     return round(max(MIN_CLIP_SECONDS, words / WORDS_PER_SECOND) + CLIP_TAIL_SECONDS, 2)

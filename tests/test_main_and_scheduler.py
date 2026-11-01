@@ -259,6 +259,60 @@ class RedoImagesTest(unittest.TestCase):
                 main.redo_images(DAY)
 
 
+class RealVideoTest(unittest.TestCase):
+    def test_footage_goes_into_consecutive_scenes_with_credit_and_can_be_removed(self):
+        from image_sources import Candidate
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"OUTPUT_DIR": str(Path(tmp) / "output")}), \
+                mock.patch("main.episodes_dir", return_value=Path(tmp) / "episodes"):
+            main.day_dir(DAY).mkdir(parents=True)
+            (main.day_dir(DAY) / "current_episode.json").write_text(json.dumps(
+                {"topic_id": 9, "scenes": [{"scene_id": i, "narration_text": f"Cena {i}"} for i in (1, 2, 3)]}))
+            visuals = Path(tmp) / "episodes" / "9" / "visuals"
+            visuals.mkdir(parents=True)
+            (visuals / "credits.json").write_text(json.dumps({str(i): Candidate(
+                "wikimedia", "d", f"https://c/foto{i}", f"Foto {i}", "Autor", "CC BY 4.0", "", 1000, 800,
+                True).to_dict() for i in (1, 2, 3)}))
+            Checkpoint(day=DAY.isoformat(), steps={s: "done" for s in main.STEPS}).save()
+
+            footage = Candidate("wikimedia", "https://u/orig.webm", "https://c/filmagem", "Raios reais",
+                                "NOAA", "Public domain", "", 1440, 1080, False, kind="Vídeo")
+            tried = []
+
+            def fetch(url):
+                tried.append(url)
+                if "orig" in url:
+                    raise RuntimeError("429")  # o Commons limita o original
+                return b"webm"
+            urls = ["https://u/orig.webm", "https://u/t/conv.webm.480p.vp9.webm"]
+            with self.assertRaises(PipelineError):  # cenas fora de sequência
+                main.attach_real_video(DAY, "File:X.webm", [1, 3], find=lambda ref, sa: (footage, urls))
+            path = main.attach_real_video(DAY, "File:X.webm", [2, 3], 1.0,
+                                          find=lambda ref, sa: (footage, urls), fetch=fetch)
+
+            self.assertEqual(tried, urls)
+            self.assertEqual(path.read_bytes(), b"webm")
+            videos = json.loads((visuals / "videos.json").read_text())
+            self.assertEqual((videos["2"]["file"], videos["2"]["start"]), (path.name, 1.0))
+            self.assertNotIn("start", videos["3"])  # continua da cena 2
+            self.assertEqual(videos["3"]["download_url"], urls[1])
+            self.assertEqual(Checkpoint.load(DAY).steps["edit"], "pending")
+            self.assertEqual(Checkpoint.load(DAY).steps["visuals"], "done")
+
+            credits = main.load_image_credits({"topic_id": 9})
+            self.assertEqual(credits.by_scene[2], "FILMAGEM REAL: Raios reais (wikimedia)")
+            self.assertEqual(credits.by_scene[1], "Foto 1 (wikimedia)")
+            self.assertEqual(credits.optional, ['Vídeo: "Raios reais" — NOAA — Public domain — https://c/filmagem'])
+            # As fotos das cenas 2 e 3 não aparecem mais: só a da cena 1 é exigida.
+            self.assertEqual(len(credits.required), 1)
+            self.assertIn("Foto 1", credits.required[0])
+
+            main.remove_real_video(DAY, [2, 3])
+            self.assertFalse((visuals / "videos.json").exists())
+            self.assertEqual(main.load_image_credits({"topic_id": 9}).by_scene[2], "Foto 2 (wikimedia)")
+
+
 class LockTest(unittest.TestCase):
     def test_second_run_is_blocked_while_first_is_running(self):
         with RunLock(port=47998):

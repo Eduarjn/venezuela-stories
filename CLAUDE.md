@@ -42,6 +42,10 @@ Arquitetura e comandos completos: `README.md`.
    `--redo-images`). Mudou só título/descrição: `python main.py --date AAAA-MM-DD --post-copy`.
 8. Depois de qualquer redo, leia a REVISÃO de novo. Se ela não mudou, o comando falhou: veja
    `--status` e o log `logs\AAAA-MM-DD.log`.
+9. Filmagem real no lugar da imagem (Wikimedia Commons, mesma regra de licença):
+   `python main.py --date AAAA-MM-DD --video-real "<link do arquivo no Commons>" --cenas 3 4`.
+   Cenas seguidas; a filmagem corre sem corte entre elas (`--inicio S` escolhe o segundo de
+   partida). Vista do espaço conta como satélite na regra 4. Voltar à imagem: `--tirar-video 3 4`.
 
 ## Publicação (manual)
 - Cole título, descrição, hashtags e o bloco "CRÉDITOS DAS IMAGENS (obrigatório...)". Os
