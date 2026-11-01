@@ -48,7 +48,9 @@ Arquitetura e comandos completos: `README.md`.
    partida). Vista do espaço conta como satélite na regra 4. Voltar à imagem: `--tirar-video 3 4`.
 
 ## Publicação (manual)
-- Cole título, descrição, hashtags e o bloco "CRÉDITOS DAS IMAGENS (obrigatório...)". Os
-  créditos opcionais e a REVISÃO não vão para a postagem. No Instagram (2.200 caracteres),
-  corte hashtags, nunca créditos.
+- `output\AAAA-MM-DD\postar.txt` tem uma seção pronta por rede (TikTok, Instagram Reels,
+  YouTube Shorts): título, descrição, hashtags no limite de cada rede e os créditos
+  obrigatórios. Cole a seção inteira. `capa.jpg` (mesma pasta) é a capa do vídeo.
+- Os créditos opcionais e a REVISÃO (`post_copy.txt`) não vão para a postagem. Faltando
+  espaço, corte hashtags, nunca créditos.
 - Depois de publicar: `python main.py --mark-published AAAA-MM-DD`.

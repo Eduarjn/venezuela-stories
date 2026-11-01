@@ -457,9 +457,21 @@ def remove_real_video(day: date, scenes: list[int]) -> None:
 
 
 def write_post_copy(day: date, episode: dict) -> Path:
+    """post_copy.txt (revisão e créditos), postar.txt (legenda pronta de cada rede) e capa.jpg."""
+    from publicacao import build_ready_posts, find_font, make_cover
+
+    credits = load_image_credits(episode)
+    episode = {**episode, "date": day.isoformat()}
     post_copy = day_dir(day) / "post_copy.txt"
-    post_copy.write_text(build_post_copy({**episode, "date": day.isoformat()},
-                                         load_image_credits(episode)), encoding="utf-8")
+    post_copy.write_text(build_post_copy(episode, credits), encoding="utf-8")
+    (day_dir(day) / "postar.txt").write_text(build_ready_posts(episode, credits.required), encoding="utf-8")
+    image = episodes_dir() / str(episode.get("topic_id")) / "visuals" / "scene_01.png"
+    if image.exists():
+        try:
+            make_cover(image, episode.get("post_title", ""), day_dir(day) / "capa.jpg",
+                       find_font(episodes_dir().parent / "fonts"))
+        except Exception as exc:  # a capa ajuda, mas não pode derrubar o passo
+            log.warning("Capa não gerada: %s", exc)
     return post_copy
 
 
