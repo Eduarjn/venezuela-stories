@@ -260,6 +260,26 @@ def _lines(words: list[str]) -> list[list[int]]:
     return lines
 
 
+def split_spoken_groups(words: list[TimedWord]) -> list[TimedWord]:
+    """O edge-tts devolve número com o que vem junto como um bloco só ("Em 29 de outubro de
+    2016", "70 quilômetros por segundo"). Uma "palavra" maior que a linha da legenda não
+    quebra e corta nas bordas do vídeo. Aqui o bloco vira palavras, com o tempo do bloco
+    dividido pelo tamanho de cada uma."""
+    result: list[TimedWord] = []
+    for word in words:
+        parts = word.text.split()
+        if len(parts) < 2:
+            result.append(word)
+            continue
+        total = sum(len(part) for part in parts)
+        start = word.start
+        for i, part in enumerate(parts):
+            end = word.end if i == len(parts) - 1 else start + (word.end - word.start) * len(part) / total
+            result.append(TimedWord(part, start, end))
+            start = end
+    return result
+
+
 def _sentences(words: list[TimedWord]) -> list[list[TimedWord]]:
     """Separa em frases: pontuação final ou pausa longa. Um grupo nunca cruza frases."""
     groups: list[list[TimedWord]] = [[]]
@@ -463,8 +483,8 @@ class VideoEditor:
                 raise VideoEditorError(f"cena {sid} sem áudio no timeline.json")
             # Duração em frames inteiros: vídeo e áudio terminam no mesmo frame.
             frames = max(1, math.ceil(voice["duration"] * FPS - 1e-6))
-            words = mark_sentence_ends(
-                [TimedWord(w["text"], cursor + w["start"], cursor + w["end"]) for w in voice["words"]],
+            words = mark_sentence_ends(split_spoken_groups(
+                [TimedWord(w["text"], cursor + w["start"], cursor + w["end"]) for w in voice["words"]]),
                 scene.get("narration_text", ""))
             fx = effects[index]
             transition = fx.transition

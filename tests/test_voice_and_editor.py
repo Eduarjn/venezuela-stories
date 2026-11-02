@@ -170,6 +170,25 @@ class EditorUnitTest(unittest.TestCase):
                       chunks("Estamos no Lago de Maracaibo no noroeste da Venezuela".split(),
                              "Estamos no Lago de Maracaibo, no noroeste da Venezuela."))
 
+    def test_long_tts_blocks_are_split_so_no_line_runs_off_the_screen(self):
+        # O edge-tts devolve "Em 29 de outubro de 2016" como uma palavra só: sem partir, a
+        # linha passava da largura do vídeo e cortava nas bordas.
+        from video_editor import SUB_MAX_LINE_CHARS, _lines, mark_sentence_ends, split_spoken_groups
+
+        words = split_spoken_groups([TimedWord("Os", 0.0, 0.2), TimedWord("70 quilômetros por segundo", 0.2, 2.8),
+                                     TimedWord("e", 2.8, 2.9), TimedWord("queimam", 2.9, 3.4)])
+        self.assertEqual([w.text for w in words], ["Os", "70", "quilômetros", "por", "segundo", "e", "queimam"])
+        self.assertEqual(words[1].start, 0.2)
+        self.assertEqual(words[4].end, 2.8)
+        self.assertTrue(all(a.end <= b.start + 1e-9 and a.start < a.end for a, b in zip(words, words[1:])))
+        marked = mark_sentence_ends(split_spoken_groups(self.words(["Em 29 de outubro de 2016", "as", "autoridades",
+                                                                    "fizeram", "o", "desfile"])),
+                                    "Em 29 de outubro de 2016, as autoridades fizeram o desfile.")
+        for chunk in chunk_words(marked):
+            texts = [w.text for w in chunk]
+            for line in _lines(texts):
+                self.assertLessEqual(len(" ".join(texts[i] for i in line)), SUB_MAX_LINE_CHARS, texts)
+
     def test_mark_sentence_ends_also_marks_commas_and_dashes(self):
         from video_editor import mark_sentence_ends
 
