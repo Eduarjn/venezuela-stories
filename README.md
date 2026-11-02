@@ -279,6 +279,10 @@ python publicar.py --date 2026-11-02 --quando "2026-11-02 19:00"   # agenda
 python publicar.py --date 2026-11-02 --redes tiktok,instagram     # só algumas redes
 python publicar.py --agenda 2026-11-02 2026-11-03 2026-11-04 --inicio "2026-11-03 19:00"
                                        # rotina: 1 vídeo por dia, no mesmo horário
+
+# vídeo baixado (gerado em outro computador): o .mp4 e o AAAA-MM-DD_postar.txt na mesma pasta
+python publicar.py --video "C:\Users\eduar\Downloads\2026-11-02_titulo.mp4" --quando "2026-11-02 19:00"
+python publicar.py --agenda-videos v1.mp4 v2.mp4 v3.mp4 --inicio "2026-11-03 19:00"
 ```
 
 Cada rede recebe a sua legenda (a mesma do `postar.txt`: título, descrição, hashtags no

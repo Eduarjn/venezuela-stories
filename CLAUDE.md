@@ -62,3 +62,5 @@ Arquitetura e comandos completos: `README.md`.
   `--quando "AAAA-MM-DD HH:MM"` agenda; rotina de vários vídeos, 1 por dia:
   `python publicar.py --agenda DIA1 DIA2 DIA3 --inicio "AAAA-MM-DD HH:MM"`. Marca como
   publicado sozinho. Reels do Facebook só até 90 s (vídeo maior não sobe lá; as outras redes seguem).
+  Vídeo baixado (gerado na nuvem): `python publicar.py --video arquivo.mp4 [--quando ...]` ou
+  `--agenda-videos a.mp4 b.mp4 --inicio ...`, com o `AAAA-MM-DD_postar.txt` na mesma pasta.

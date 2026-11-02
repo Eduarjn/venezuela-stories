@@ -123,5 +123,39 @@ class PublishTest(unittest.TestCase):
         self.assertIsNotNone(publicar.parse_when("2026-11-03 19:00").utcoffset())
 
 
+class DownloadedVideoTest(unittest.TestCase):
+    """Vídeo baixado no PC: o .mp4 e o AAAA-MM-DD_postar.txt na mesma pasta, sem o projeto."""
+
+    def test_postar_txt_round_trip_gives_the_same_captions(self):
+        from publicacao import build_ready_posts, network_posts
+
+        text = build_ready_posts({**EPISODE, "date": "2026-11-02"}, [])
+        parsed = publicar.parse_postar(text)
+        expected = network_posts({**EPISODE, "date": "2026-11-02"}, [])
+        for network in ("tiktok", "instagram", "facebook", "youtube"):
+            self.assertEqual(parsed[network]["caption"], expected[network]["caption"], network)
+        self.assertEqual(parsed["youtube"]["title"], expected["youtube"]["title"])
+
+    def test_publishes_a_downloaded_video_with_the_text_next_to_it(self):
+        from publicacao import build_ready_posts
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            video = folder / "2026-11-02_o-desfile.mp4"
+            video.write_bytes(b"mp4")
+            with self.assertRaises(publicar.PublishError):  # sem o texto ao lado
+                publicar.publish_file(video, ["tiktok"], client=publicar.UploadPostClient("k", "u",
+                                                                                         session=FakeSession()))
+            (folder / "2026-11-02_postar.txt").write_text(build_ready_posts({**EPISODE, "date": "2026-11-02"}, []),
+                                                          encoding="utf-8")
+            session = FakeSession()
+            with mock.patch("publicar.video_seconds", return_value=74):
+                results = publicar.publish_file(video, ["tiktok", "instagram", "facebook"],
+                                                client=publicar.UploadPostClient("k", "u", session=session))
+            self.assertTrue(all(r.ok for r in results))
+            self.assertEqual(len(session.calls), 3)
+            self.assertTrue((folder / "2026-11-02_o-desfile.publicacao.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

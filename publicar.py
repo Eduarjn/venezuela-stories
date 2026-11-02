@@ -19,6 +19,10 @@ Uso, sempre depois da revisão do vídeo:
         # rotina: 1 vídeo por dia no mesmo horário; o Upload-Post publica na hora marcada,
         # mesmo com o computador desligado
 
+Vídeo baixado (gerado em outro computador): o .mp4 e o AAAA-MM-DD_postar.txt na mesma pasta.
+    python publicar.py --video "C:\Downloads\2026-11-02_titulo.mp4" --quando "2026-11-02 19:00"
+    python publicar.py --agenda-videos v1.mp4 v2.mp4 v3.mp4 --inicio "2026-11-03 19:00"
+
 Duração: TikTok até 10 min, Reels do Instagram até 3 min, Reels do Facebook até 90 s.
 Vídeo maior que o limite de uma rede não sobe nela (as outras seguem) e o motivo aparece.
 Resultado em output/AAAA-MM-DD/publicacao.json; com todas as redes ok, o tema é marcado
@@ -31,6 +35,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -143,12 +148,74 @@ def load_publication(day: date) -> tuple[dict, Path, dict]:
     return episode, video, network_posts(episode, credits.required_items)
 
 
+def parse_postar(text: str) -> dict[str, dict[str, str]]:
+    """Legendas de cada rede a partir de um postar.txt (o arquivo que acompanha o vídeo)."""
+    sections: dict[str, list[str]] = {}
+    current = None
+    for line in text.splitlines():
+        header = re.match(r"^=== (.+?) ===$", line)
+        if header:
+            current = header.group(1).split()[0].lower()
+            sections[current] = []
+        elif current:
+            sections[current].append(line)
+    posts: dict[str, dict[str, str]] = {}
+    for network in ("tiktok", "instagram", "facebook"):
+        body = "\n".join(sections.get(network, [])).strip()
+        if body:
+            posts[network] = {"title": body.splitlines()[0], "caption": body}
+    youtube = "\n".join(sections.get("youtube", [])).strip()
+    match = re.match(r"Título:\s*\n(.*?)\n\s*\nDescrição:\s*\n(.*)", youtube, re.S)
+    if match:
+        posts["youtube"] = {"title": match.group(1).strip(), "caption": match.group(2).strip()}
+    return posts
+
+
+def load_video_file(video: Path) -> tuple[Path, dict]:
+    """Vídeo baixado + o postar.txt ao lado (AAAA-MM-DD_postar.txt ou postar.txt)."""
+    if not video.exists():
+        raise PublishError(f"{video} não existe")
+    texts = [video.with_name(f"{video.name[:10]}_postar.txt"), video.with_name("postar.txt")]
+    text = next((t for t in texts if t.exists()), None)
+    if text is None:
+        raise PublishError(f"falta o texto ao lado do vídeo: {texts[0].name} (vem junto com o vídeo)")
+    posts = parse_postar(text.read_text(encoding="utf-8"))
+    if not posts:
+        raise PublishError(f"{text.name} não tem as seções das redes (=== TIKTOK ===...)")
+    return video, posts
+
+
+def publish_file(video: Path, networks: list[str] | None = None, when: datetime | None = None,
+                 dry_run: bool = False, client=None) -> list[PostResult]:
+    """Publica um vídeo baixado (fora do projeto). O resultado fica em <vídeo>.publicacao.json."""
+    video, posts = load_video_file(Path(video))
+    results = _send_all(video, posts, networks or networks_from_env(), when, dry_run, client)
+    if not dry_run:
+        _write_record(video.with_name(video.stem + ".publicacao.json"), video.name[:10], video, when, results)
+    return results
+
+
+def _write_record(path: Path, day: str, video: Path, when: datetime | None, results: list[PostResult]) -> None:
+    record = {"date": day, "video": str(video), "when": when.isoformat(timespec="minutes") if when else "agora",
+              "results": [asdict(r) for r in results]}
+    path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def publish(day: date, networks: list[str] | None = None, when: datetime | None = None,
             dry_run: bool = False, client=None, mark_published=None) -> list[PostResult]:
     import main
 
-    networks = networks or networks_from_env()
     episode, video, posts = load_publication(day)
+    results = _send_all(video, posts, networks or networks_from_env(), when, dry_run, client)
+    if not dry_run:
+        _write_record(main.day_dir(day) / "publicacao.json", day.isoformat(), video, when, results)
+        if results and all(r.ok for r in results):
+            (mark_published or _mark_published)(day)
+    return results
+
+
+def _send_all(video: Path, posts: dict, networks: list[str], when: datetime | None, dry_run: bool,
+              client) -> list[PostResult]:
     seconds = video_seconds(video)
     if not dry_run and client is None:
         client = UploadPostClient.from_env()
@@ -158,7 +225,10 @@ def publish(day: date, networks: list[str] | None = None, when: datetime | None 
         if seconds > limit:
             results.append(PostResult(network, False, f"vídeo com {seconds:.0f}s; o limite de {network} é {limit}s"))
             continue
-        post = posts[network]
+        post = posts.get(network)
+        if post is None:
+            results.append(PostResult(network, False, f"o texto não tem a seção de {network}"))
+            continue
         if dry_run:
             fields = UploadPostClient("teste", "teste").fields(network, post, when) if client is None \
                 else client.fields(network, post, when)
@@ -173,14 +243,6 @@ def publish(day: date, networks: list[str] | None = None, when: datetime | None 
                                       when.isoformat(timespec="minutes") if when else None))
         except Exception as exc:  # noqa: BLE001 - uma rede falhar não impede as outras
             results.append(PostResult(network, False, str(exc)[:300]))
-    if not dry_run:
-        record = {"date": day.isoformat(), "video": str(video), "seconds": round(seconds, 1),
-                  "when": when.isoformat(timespec="minutes") if when else "agora",
-                  "results": [asdict(r) for r in results]}
-        (main.day_dir(day) / "publicacao.json").write_text(json.dumps(record, ensure_ascii=False, indent=2),
-                                                           encoding="utf-8")
-        if results and all(r.ok for r in results):
-            (mark_published or _mark_published)(day)
     return results
 
 
@@ -199,7 +261,7 @@ def schedule(days: list[date], start: datetime, every_hours: float = 24, **kwarg
             for i, day in enumerate(days)}
 
 
-def _print(day: date, results: list[PostResult]) -> bool:
+def _print(day, results: list[PostResult]) -> bool:
     for r in results:
         when = f" (agendado para {r.scheduled_for})" if r.scheduled_for else ""
         print(f"  {'[OK]' if r.ok else '[X]'} {day} {r.network}{when}: {r.detail}")
@@ -222,6 +284,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quando", help='agenda para "AAAA-MM-DD HH:MM" (sem isso, publica agora)')
     parser.add_argument("--agenda", nargs="+", type=date.fromisoformat, metavar="DIA",
                         help="vários vídeos, um a cada --intervalo-horas a partir de --inicio")
+    parser.add_argument("--video", type=Path, help="vídeo baixado (.mp4), com o AAAA-MM-DD_postar.txt ao lado")
+    parser.add_argument("--agenda-videos", nargs="+", type=Path, metavar="MP4",
+                        help="vários vídeos baixados, um a cada --intervalo-horas a partir de --inicio")
     parser.add_argument("--inicio", help='primeiro horário da --agenda, "AAAA-MM-DD HH:MM"')
     parser.add_argument("--intervalo-horas", type=float, default=24.0)
     parser.add_argument("--redes", help="ex.: tiktok,instagram (padrão: PUBLICAR_REDES do .env)")
@@ -229,12 +294,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         networks = [n.strip().lower() for n in args.redes.split(",")] if args.redes else networks_from_env()
-        if args.agenda:
+        if args.agenda or args.agenda_videos:
             if not args.inicio:
-                parser.error('--agenda precisa de --inicio "AAAA-MM-DD HH:MM"')
-            done = schedule(args.agenda, parse_when(args.inicio), args.intervalo_horas,
-                            networks=networks, dry_run=args.teste)
-            return 0 if all([_print(day, results) for day, results in done.items()]) else 1
+                parser.error('a agenda precisa de --inicio "AAAA-MM-DD HH:MM"')
+            start = parse_when(args.inicio)
+            ok = True
+            for i, item in enumerate(args.agenda or args.agenda_videos):
+                when = start + timedelta(hours=args.intervalo_horas * i)
+                results = (publish(item, networks, when, dry_run=args.teste) if args.agenda
+                           else publish_file(item, networks, when, dry_run=args.teste))
+                ok &= _print(item if args.agenda else item.name, results)
+            return 0 if ok else 1
+        if args.video:
+            when = parse_when(args.quando) if args.quando else None
+            return 0 if _print(args.video.name, publish_file(args.video, networks, when, dry_run=args.teste)) else 1
         if not args.date:
             parser.error("diga o dia: --date AAAA-MM-DD (ou --agenda)")
         when = parse_when(args.quando) if args.quando else None
