@@ -57,3 +57,8 @@ Arquitetura e comandos completos: `README.md`.
 - Os créditos opcionais e a REVISÃO (`post_copy.txt`) não vão para a postagem. Faltando
   espaço, corte hashtags, nunca créditos.
 - Depois de publicar: `python main.py --mark-published AAAA-MM-DD`.
+- Postagem automática (Upload-Post, chaves no `.env`), sempre depois da revisão:
+  `python publicar.py --date AAAA-MM-DD --teste` (mostra sem enviar), sem `--teste` publica,
+  `--quando "AAAA-MM-DD HH:MM"` agenda; rotina de vários vídeos, 1 por dia:
+  `python publicar.py --agenda DIA1 DIA2 DIA3 --inicio "AAAA-MM-DD HH:MM"`. Marca como
+  publicado sozinho. Reels do Facebook só até 90 s (vídeo maior não sobe lá; as outras redes seguem).

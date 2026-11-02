@@ -20,6 +20,7 @@ TIKTOK_MAX_HASHTAGS = 5
 YOUTUBE_TITLE_MAX = 100
 YOUTUBE_DESCRIPTION_MAX = 5000
 YOUTUBE_HASHTAGS = 3        # o YouTube mostra as 3 primeiras acima do título
+FACEBOOK_HASHTAGS = 3       # no Facebook hashtag pesa pouco: só as principais
 CREDIT_NOTE = "Créditos (a licença exige): imagens de acervos livres, recortadas e animadas para o vídeo."
 SOURCE_NAMES = {"wikimedia": "do Wikimedia Commons", "pexels": "da Pexels"}
 
@@ -95,38 +96,57 @@ def youtube_description(description: str, items: list, sources: str, tags: list[
     return text
 
 
-def build_ready_posts(episode: dict, credit_items: list) -> str:
-    """Conteúdo do postar.txt: uma seção por rede, pronta para colar. credit_items: as
-    imagens que a licença obriga a creditar (image_sources.Candidate)."""
+def network_posts(episode: dict, credit_items: list) -> dict[str, dict[str, str]]:
+    """Título e legenda de cada rede, prontos para colar ou para a API (publicar.py)."""
     title = (episode.get("post_title") or "").strip()
     description = (episode.get("post_description") or "").strip()
     credits = compact_credits(credit_items)
     sources = ""
     if episode.get("track") == "fact" and episode.get("sources"):
         sources = "Fontes:\n" + "\n".join(f"- {s.get('title', '')}: {s['url']}" for s in episode["sources"])
-    tiktok = caption(title, description, _hashtags(episode, TIKTOK_MAX_HASHTAGS), credits)
-    instagram = caption(title, description, _hashtags(episode, INSTAGRAM_MAX_HASHTAGS), credits)
-    too_long = [name for name, text in (("TikTok", tiktok), ("Instagram", instagram)) if len(text) > CAPTION_MAX]
+    return {
+        "tiktok": {"title": title, "caption": caption(title, description,
+                                                      _hashtags(episode, TIKTOK_MAX_HASHTAGS), credits)},
+        "instagram": {"title": title, "caption": caption(title, description,
+                                                         _hashtags(episode, INSTAGRAM_MAX_HASHTAGS), credits)},
+        "facebook": {"title": title, "caption": caption(title, description,
+                                                        _hashtags(episode, FACEBOOK_HASHTAGS), credits)},
+        "youtube": {"title": short_title(title),
+                    "caption": youtube_description(description, credit_items, sources,
+                                                   _hashtags(episode, YOUTUBE_HASHTAGS))},
+    }
+
+
+def build_ready_posts(episode: dict, credit_items: list) -> str:
+    """Conteúdo do postar.txt: uma seção por rede, pronta para colar. credit_items: as
+    imagens que a licença obriga a creditar (image_sources.Candidate)."""
+    posts = network_posts(episode, credit_items)
+    too_long = [name.capitalize() for name in ("tiktok", "instagram", "facebook")
+                if len(posts[name]["caption"]) > CAPTION_MAX]
     lines = [
         "=== ANTES DE POSTAR ===",
         "- Capa: capa.jpg (nesta pasta). No Instagram: Editar capa > Adicionar da galeria. Onde não der "
         "para enviar a imagem, escolha o quadro de capa no início do vídeo.",
         "- A narração é voz sintética: ative o rótulo de conteúdo gerado por IA se a rede pedir.",
+        "- Postagem automática (depois de revisar): python publicar.py --date " + str(episode.get("date", "")),
         *([f"- ATENÇÃO: a legenda do {' e do '.join(too_long)} passou de {CAPTION_MAX} caracteres; "
            "corte a descrição (nunca os créditos)."] if too_long else []),
         "",
         "=== TIKTOK (cole tudo na legenda) ===",
-        tiktok,
+        posts["tiktok"]["caption"],
         "",
         f"=== INSTAGRAM REELS (cole tudo na legenda; o Instagram aceita até {INSTAGRAM_MAX_HASHTAGS} hashtags) ===",
-        instagram,
+        posts["instagram"]["caption"],
+        "",
+        "=== FACEBOOK REELS (cole tudo na descrição) ===",
+        posts["facebook"]["caption"],
         "",
         "=== YOUTUBE SHORTS ===",
         "Título:",
-        short_title(title),
+        posts["youtube"]["title"],
         "",
         "Descrição:",
-        youtube_description(description, credit_items, sources, _hashtags(episode, YOUTUBE_HASHTAGS)),
+        posts["youtube"]["caption"],
         "",
         "=== DEPOIS DE PUBLICAR ===",
         f"python main.py --mark-published {episode.get('date', '')}",

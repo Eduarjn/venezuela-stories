@@ -257,3 +257,35 @@ Saída do dia: `output/AAAA-MM-DD_titulo-do-video.mp4` e `output/AAAA-MM-DD/post
 
 O PC precisa estar ligado (pode estar com a tela bloqueada) no horário. A publicação continua
 manual: assista ao vídeo, cole o `post_copy.txt` e rode `--mark-published`.
+
+## Publicação automática (`publicar.py`)
+
+Publica (ou agenda) o vídeo do dia no TikTok, no Instagram e no Facebook pelo
+[Upload-Post](https://www.upload-post.com), um serviço com uma API só para as três redes.
+Pelas APIs oficiais, o TikTok só deixa um app próprio postar vídeo público depois de uma
+auditoria, e Instagram/Facebook pedem um app de desenvolvedor da Meta; o Upload-Post já
+passou por isso.
+
+Preparação (uma vez):
+1. Crie a conta no Upload-Post e um perfil ("user"). Conecte nele o TikTok, o Instagram
+   (conta profissional) e a página do Facebook. A postagem no TikTok pede plano pago.
+2. Gere a chave da API no painel e preencha no `.env`: `UPLOAD_POST_API_KEY`,
+   `UPLOAD_POST_USER` e, se tiver mais de uma página, `UPLOAD_POST_FACEBOOK_PAGE_ID`.
+3. Teste sem enviar: `python publicar.py --date 2026-11-02 --teste`.
+
+```
+python publicar.py --date 2026-11-02                         # publica agora nas redes do .env
+python publicar.py --date 2026-11-02 --quando "2026-11-02 19:00"   # agenda
+python publicar.py --date 2026-11-02 --redes tiktok,instagram     # só algumas redes
+python publicar.py --agenda 2026-11-02 2026-11-03 2026-11-04 --inicio "2026-11-03 19:00"
+                                       # rotina: 1 vídeo por dia, no mesmo horário
+```
+
+Cada rede recebe a sua legenda (a mesma do `postar.txt`: título, descrição, hashtags no
+limite da rede e os créditos obrigatórios). Duração: TikTok até 10 min, Reels do Instagram
+até 3 min, Reels do Facebook até 90 s; vídeo maior que o limite de uma rede não sobe nela
+e as outras seguem. O agendamento fica no Upload-Post: o vídeo sai na hora marcada mesmo com
+o computador desligado. O resultado vai para `output/AAAA-MM-DD/publicacao.json` e, com
+todas as redes ok, o tema é marcado como publicado.
+
+Revise antes de publicar (seção REVISÃO do `post_copy.txt`): a rotina publica o que você aprovou.
