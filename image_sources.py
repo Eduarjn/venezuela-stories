@@ -163,7 +163,10 @@ def classify_license(code: str, short_name: str) -> str | None:
     text = f"{code} {short_name}".lower().replace("_", "-")
     if re.search(r"\b(nc|nd)\b|-nc\b|-nd\b|noncommercial|non-commercial|noderiv|no-deriv", text):
         return None
-    if "cc0" in text or "public domain" in text or re.search(r"(^|\s)pd\b|^pd-", text):
+    # Domínio público também com outros rótulos do Commons: PDM (Public Domain Mark, comum
+    # nas digitalizações da Biblioteca do Congresso) e "No restrictions" (Flickr Commons).
+    if ("cc0" in text or "public domain" in text or re.search(r"(^|\s)pdm?\b|^pd-", text)
+            or "no restrictions" in text or "no known copyright" in text):
         return "pd"
     if re.search(r"by-sa|by sa|attribution-sharealike|attribution share ?alike", text):
         return "by-sa"
@@ -211,6 +214,9 @@ class WikimediaSource:
         self.get_html = get_html
 
     def search(self, query: str) -> list[Candidate]:
+        # No Commons, "-palavra" quer dizer "sem essa palavra": o título "USASC -22343" buscado
+        # assim mesmo excluía o próprio arquivo. O hífen solto (" - ") não muda nada.
+        query = re.sub(r"(^|\s)-(?=\w)", r"\1", query)
         try:
             data = self.get_json(self.API, {
                 "action": "query", "format": "json", "formatversion": "2",
@@ -290,7 +296,7 @@ def candidate_from_file_page(title: str, page: str, allow_share_alike: bool = Fa
     """Candidate a partir da página HTML de um arquivo do Commons (None: licença ou arquivo
     que não serve)."""
     shorts = list(dict.fromkeys(s for s in _field(page, "short") if s))
-    kinds = {("pd" if s.lower() == "no restrictions" else classify_license(s, s)) for s in shorts}
+    kinds = {classify_license(s, s) for s in shorts}
     kind = next((k for k in ("pd", "by", "by-sa") if k in kinds), None)
     if kind is None or (kind == "by-sa" and not allow_share_alike):
         return None
@@ -299,8 +305,7 @@ def candidate_from_file_page(title: str, page: str, allow_share_alike: bool = Fa
     if not original or not size:
         return None
     width, height = (int(re.sub(r"\D", "", size.group(i))) for i in (1, 2))
-    license = next((s for s in shorts if classify_license(s, s) == kind or (kind == "pd" and s.lower() == "no restrictions")),
-                   shorts[0])
+    license = next((s for s in shorts if classify_license(s, s) == kind), shorts[0])
     links = _field(page, "link")
     marker = {"by": "/licenses/by/", "by-sa": "/licenses/by-sa/"}.get(kind, "")
     license_url = next((u for u in links if marker and marker in u), "")

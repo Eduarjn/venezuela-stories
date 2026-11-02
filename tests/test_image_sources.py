@@ -57,6 +57,9 @@ class LicenseTest(unittest.TestCase):
     def test_classification(self):
         self.assertEqual(classify_license("pd", "Public domain"), "pd")
         self.assertEqual(classify_license("cc0", "CC0"), "pd")
+        self.assertEqual(classify_license("pdm", "PDM"), "pd")  # Public Domain Mark (Biblioteca do Congresso)
+        self.assertEqual(classify_license("", "No restrictions"), "pd")  # Flickr Commons
+        self.assertIsNone(classify_license("", "pdf"))
         self.assertEqual(classify_license("cc-by-4.0", "CC BY 4.0"), "by")
         self.assertEqual(classify_license("cc-by-sa-4.0", "CC BY-SA 4.0"), "by-sa")
         self.assertIsNone(classify_license("cc-by-nc-4.0", "CC BY-NC 4.0"))
@@ -102,6 +105,8 @@ class WikimediaTest(unittest.TestCase):
         self.assertFalse(found[1].attribution_required)
         self.assertEqual(found[0].download_url, "https://upload.wikimedia.org/thumb/Maracaibo_photo.jpg")
         self.assertEqual(self.requests[0]["gsrsearch"], "Lake Maracaibo")
+        src.search("American soldiers, 1918- USASC -22343 - DPLA")  # "-22343" não pode virar exclusão
+        self.assertEqual(self.requests[1]["gsrsearch"], "American soldiers, 1918- USASC 22343 - DPLA")
         self.assertEqual(self.requests[0]["gsrnamespace"], "6")
 
     def test_share_alike_only_when_allowed(self):
