@@ -260,36 +260,52 @@ manual: assista ao vídeo, cole o `post_copy.txt` e rode `--mark-published`.
 
 ## Publicação automática (`publicar.py`)
 
-Publica (ou agenda) o vídeo do dia no TikTok, no Instagram e no Facebook pelo
-[Upload-Post](https://www.upload-post.com), um serviço com uma API só para as três redes.
+Publica (ou agenda) o vídeo no TikTok, no Instagram e no Facebook (e no YouTube, se quiser)
+pelo [Upload-Post](https://www.upload-post.com), um serviço com uma API só para as redes.
 Pelas APIs oficiais, o TikTok só deixa um app próprio postar vídeo público depois de uma
 auditoria, e Instagram/Facebook pedem um app de desenvolvedor da Meta; o Upload-Post já
-passou por isso.
+passou por isso. Cada vídeo sobe uma vez só, com a legenda própria de cada rede.
 
 Preparação (uma vez):
-1. Crie a conta no Upload-Post e um perfil ("user"). Conecte nele o TikTok, o Instagram
-   (conta profissional) e a página do Facebook. A postagem no TikTok pede plano pago.
+1. Crie a conta em app.upload-post.com e um perfil em Manage Users. Conecte nele o TikTok,
+   o Instagram (conta profissional) e a página do Facebook. O plano grátis não posta no
+   TikTok (só os pagos) e tem 10 envios por mês.
 2. Gere a chave da API no painel e preencha no `.env`: `UPLOAD_POST_API_KEY`,
-   `UPLOAD_POST_USER` e, se tiver mais de uma página, `UPLOAD_POST_FACEBOOK_PAGE_ID`.
+   `UPLOAD_POST_USER` (o nome do perfil) e, se tiver mais de uma página do Facebook,
+   `UPLOAD_POST_FACEBOOK_PAGE_ID`.
 3. Teste sem enviar: `python publicar.py --date 2026-11-02 --teste`.
 
 ```
-python publicar.py --date 2026-11-02                         # publica agora nas redes do .env
+python publicar.py --date 2026-11-02                         # publica agora e espera a confirmação
 python publicar.py --date 2026-11-02 --quando "2026-11-02 19:00"   # agenda
 python publicar.py --date 2026-11-02 --redes tiktok,instagram     # só algumas redes
 python publicar.py --agenda 2026-11-02 2026-11-03 2026-11-04 --inicio "2026-11-03 19:00"
                                        # rotina: 1 vídeo por dia, no mesmo horário
+python publicar.py --status 2026-11-02                       # o que já saiu em cada rede
 
-# vídeo baixado (gerado em outro computador): o .mp4 e o AAAA-MM-DD_postar.txt na mesma pasta
+# vídeo baixado (gerado em outro computador): o .mp4, o AAAA-MM-DD_postar.txt e o
+# AAAA-MM-DD_capa.jpg na mesma pasta (a pasta PRONTO_PARA_POSTAR já vem assim)
 python publicar.py --video "C:\Users\eduar\Downloads\2026-11-02_titulo.mp4" --quando "2026-11-02 19:00"
 python publicar.py --agenda-videos v1.mp4 v2.mp4 v3.mp4 --inicio "2026-11-03 19:00"
+python publicar.py --status "C:\Users\eduar\Downloads\2026-11-02_titulo.mp4"
 ```
 
-Cada rede recebe a sua legenda (a mesma do `postar.txt`: título, descrição, hashtags no
-limite da rede e os créditos obrigatórios). Duração: TikTok até 10 min, Reels do Instagram
-até 3 min, Reels do Facebook até 90 s; vídeo maior que o limite de uma rede não sobe nela
-e as outras seguem. O agendamento fica no Upload-Post: o vídeo sai na hora marcada mesmo com
-o computador desligado. O resultado vai para `output/AAAA-MM-DD/publicacao.json` e, com
-todas as redes ok, o tema é marcado como publicado.
+- Legendas: as mesmas do `postar.txt` (título, descrição, hashtags no limite da rede e os
+  créditos obrigatórios). A `capa.jpg` vai como capa do Reels do Instagram.
+- Vídeo longo (mais de 1 minuto) sobe em todas as redes: TikTok até 10 min, Reels do
+  Instagram até 15 min, YouTube Shorts até 3 min (mais que isso vira vídeo normal do canal).
+  Reels do Facebook vão até 90 s; acima disso o vídeo entra como vídeo normal da página,
+  com a capa. Vídeo acima do limite de uma rede não sobe nela e as outras seguem.
+- Rótulo de IA: a narração é voz sintética, então o envio marca o vídeo como conteúdo
+  gerado por IA (TikTok, Instagram, Reels do Facebook e YouTube). `ROTULO_IA=0` desliga.
+- Agendado, o vídeo sai na hora marcada mesmo com o computador desligado. `--status`
+  mostra se já saiu ou se deu erro numa rede.
+- Sem duplicar: o resultado vai para `output/AAAA-MM-DD/publicacao.json` (ou
+  `<vídeo>.publicacao.json`). Rodar de novo só manda para as redes que falharam; o que já
+  foi ou ainda está processando não é reenviado. Com todas as redes ok, o tema é marcado
+  como publicado.
+- Pelo Claude (sem terminal): o Upload-Post tem conector oficial no diretório do Claude
+  (Personalizar > Conectores > Upload-Post). Ele agenda e mostra status e estatísticas, mas
+  não lê arquivos do computador; para os vídeos daqui, use o `publicar.py`.
 
 Revise antes de publicar (seção REVISÃO do `post_copy.txt`): a rotina publica o que você aprovou.

@@ -52,7 +52,7 @@ Arquitetura e comandos completos: `README.md`.
 
 ## Publicação (manual)
 - `output\AAAA-MM-DD\postar.txt` tem uma seção pronta por rede (TikTok, Instagram Reels,
-  YouTube Shorts): título, descrição, hashtags no limite de cada rede e os créditos
+  Facebook Reels, YouTube Shorts): título, descrição, hashtags no limite de cada rede e os créditos
   obrigatórios. Cole a seção inteira. `capa.jpg` (mesma pasta) é a capa do vídeo.
 - Os créditos opcionais e a REVISÃO (`post_copy.txt`) não vão para a postagem. Faltando
   espaço, corte hashtags, nunca créditos.
@@ -61,6 +61,11 @@ Arquitetura e comandos completos: `README.md`.
   `python publicar.py --date AAAA-MM-DD --teste` (mostra sem enviar), sem `--teste` publica,
   `--quando "AAAA-MM-DD HH:MM"` agenda; rotina de vários vídeos, 1 por dia:
   `python publicar.py --agenda DIA1 DIA2 DIA3 --inicio "AAAA-MM-DD HH:MM"`. Marca como
-  publicado sozinho. Reels do Facebook só até 90 s (vídeo maior não sobe lá; as outras redes seguem).
+  publicado sozinho. `--status AAAA-MM-DD` mostra o que já saiu em cada rede. Rodar de novo
+  só reenvia as redes que falharam (o registro fica no `publicacao.json`).
+  Vídeo longo: Reels do Facebook só até 90 s, acima disso vai como vídeo normal da página;
+  TikTok até 10 min, Reels do Instagram até 15 min. A narração é voz sintética: o envio
+  marca "gerado por IA" (`ROTULO_IA=0` desliga).
   Vídeo baixado (gerado na nuvem): `python publicar.py --video arquivo.mp4 [--quando ...]` ou
-  `--agenda-videos a.mp4 b.mp4 --inicio ...`, com o `AAAA-MM-DD_postar.txt` na mesma pasta.
+  `--agenda-videos a.mp4 b.mp4 --inicio ...`, com o `AAAA-MM-DD_postar.txt` (e a
+  `AAAA-MM-DD_capa.jpg`) na mesma pasta.
