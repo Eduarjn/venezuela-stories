@@ -281,12 +281,15 @@ python publicar.py --date 2026-11-02 --quando "2026-11-02 19:00"   # agenda
 python publicar.py --date 2026-11-02 --redes tiktok,instagram     # só algumas redes
 python publicar.py --agenda 2026-11-02 2026-11-03 2026-11-04 --inicio "2026-11-03 19:00"
                                        # rotina: 1 vídeo por dia, no mesmo horário
+python publicar.py --agenda 2026-11-05 2026-11-06 2026-11-07 2026-11-08 --inicio 2026-11-03 --horarios 12:00 19:00
+                                       # 2 por dia, um em cada horário (o que já passou vai para o dia seguinte)
 python publicar.py --status 2026-11-02                       # o que já saiu em cada rede
 
 # vídeo baixado (gerado em outro computador): o .mp4, o AAAA-MM-DD_postar.txt e o
 # AAAA-MM-DD_capa.jpg na mesma pasta (a pasta PRONTO_PARA_POSTAR já vem assim)
 python publicar.py --video "C:\Users\eduar\Downloads\2026-11-02_titulo.mp4" --quando "2026-11-02 19:00"
 python publicar.py --agenda-videos v1.mp4 v2.mp4 v3.mp4 --inicio "2026-11-03 19:00"
+python publicar.py --agenda-videos v1.mp4 v2.mp4 v3.mp4 v4.mp4 --inicio 2026-11-03 --horarios 12:00 19:00
 python publicar.py --status "C:\Users\eduar\Downloads\2026-11-02_titulo.mp4"
 ```
 

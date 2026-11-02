@@ -60,8 +60,9 @@ Arquitetura e comandos completos: `README.md`.
 - Postagem automática (Upload-Post, chaves no `.env`), sempre depois da revisão:
   `python publicar.py --date AAAA-MM-DD --teste` (mostra sem enviar), sem `--teste` publica,
   `--quando "AAAA-MM-DD HH:MM"` agenda; rotina de vários vídeos, 1 por dia:
-  `python publicar.py --agenda DIA1 DIA2 DIA3 --inicio "AAAA-MM-DD HH:MM"`. Marca como
-  publicado sozinho. `--status AAAA-MM-DD` mostra o que já saiu em cada rede. Rodar de novo
+  `python publicar.py --agenda DIA1 DIA2 DIA3 --inicio "AAAA-MM-DD HH:MM"`; 2 por dia:
+  `--inicio AAAA-MM-DD --horarios 12:00 19:00` (horário que já passou fica para o dia
+  seguinte). Marca como publicado sozinho. `--status AAAA-MM-DD` mostra o que já saiu em cada rede. Rodar de novo
   só reenvia as redes que falharam (o registro fica no `publicacao.json`).
   Vídeo longo: Reels do Facebook só até 90 s, acima disso vai como vídeo normal da página;
   TikTok até 10 min, Reels do Instagram até 15 min. A narração é voz sintética: o envio

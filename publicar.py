@@ -18,12 +18,16 @@ Uso, sempre depois da revisão do vídeo:
     python publicar.py --agenda 2026-11-02 2026-11-03 2026-11-04 --inicio "2026-11-03 19:00"
         # rotina: 1 vídeo por dia no mesmo horário; o Upload-Post publica na hora marcada,
         # mesmo com o computador desligado
+    python publicar.py --agenda 2026-11-05 2026-11-06 2026-11-07 2026-11-08 --inicio 2026-11-03 --horarios 12:00 19:00
+        # 2 (ou mais) vídeos por dia: um em cada horário, a partir do dia de --inicio; horário
+        # que já passou fica para o dia seguinte
     python publicar.py --status 2026-11-02            # o que já saiu em cada rede
 
 Vídeo baixado (gerado em outro computador): o .mp4, o AAAA-MM-DD_postar.txt e, se tiver, o
 AAAA-MM-DD_capa.jpg na mesma pasta.
     python publicar.py --video "C:\\Downloads\\2026-11-02_titulo.mp4" --quando "2026-11-02 19:00"
     python publicar.py --agenda-videos v1.mp4 v2.mp4 v3.mp4 --inicio "2026-11-03 19:00"
+    python publicar.py --agenda-videos v1.mp4 v2.mp4 v3.mp4 v4.mp4 --inicio 2026-11-03 --horarios 12:00 19:00
     python publicar.py --status "C:\\Downloads\\2026-11-02_titulo.mp4"
 
 Vídeo longo (mais de 1 minuto) sobe em todas as redes: TikTok até 10 min, Reels do
@@ -96,6 +100,35 @@ def parse_when(text: str) -> datetime:
         return datetime.strptime(text.strip(), "%Y-%m-%d %H:%M").astimezone()
     except ValueError:
         raise PublishError(f"horário inválido: {text!r} (use AAAA-MM-DD HH:MM, ex.: 2026-11-03 19:00)")
+
+
+def parse_start(text: str) -> datetime:
+    """Início da agenda: "2026-11-03 19:00" ou só o dia, "2026-11-03" (meia-noite)."""
+    try:
+        return datetime.strptime(text.strip(), "%Y-%m-%d").astimezone()
+    except ValueError:
+        return parse_when(text)
+
+
+def agenda_slots(start: datetime, count: int, every_hours: float = 24, times: list[str] | None = None,
+                 now: datetime | None = None) -> list[datetime]:
+    """Horário de cada vídeo da agenda. Com times (["12:00", "19:00"]): um vídeo em cada
+    horário, dia após dia, a partir de start, pulando o que já passou. Sem times: start e
+    depois a cada every_hours horas."""
+    if not times:
+        return [start + timedelta(hours=every_hours * i) for i in range(count)]
+    try:
+        clock = sorted({datetime.strptime(t.strip(), "%H:%M").time() for t in times})
+    except ValueError:
+        raise PublishError(f"horário inválido em --horarios: {' '.join(times)} (use HH:MM, ex.: 12:00 19:00)")
+    first = max(start, (now or datetime.now(timezone.utc)) + timedelta(minutes=10))
+    slots, day = [], start.date()
+    while len(slots) < count:
+        for moment in (datetime.combine(day, t).replace(tzinfo=start.tzinfo) for t in clock):
+            if moment >= first and len(slots) < count:
+                slots.append(moment)
+        day += timedelta(days=1)
+    return slots
 
 
 def networks_from_env() -> list[str]:
@@ -469,10 +502,11 @@ def _mark_published(day: date) -> None:
         db.set_status(topic.id, "published")
 
 
-def schedule(days: list[date], start: datetime, every_hours: float = 24, **kwargs) -> dict[date, list[PostResult]]:
-    """Rotina: um vídeo por vez, a partir de start, a cada every_hours horas."""
-    return {day: publish(day, when=start + timedelta(hours=every_hours * i), **kwargs)
-            for i, day in enumerate(days)}
+def schedule(days: list[date], start: datetime, every_hours: float = 24, times: list[str] | None = None,
+             **kwargs) -> dict[date, list[PostResult]]:
+    """Rotina: um vídeo por horário (times) ou a cada every_hours horas, a partir de start."""
+    slots = agenda_slots(start, len(days), every_hours, times)
+    return {day: publish(day, when=when, **kwargs) for day, when in zip(days, slots)}
 
 
 def _print(day, results: list[PostResult]) -> bool:
@@ -504,6 +538,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="vários vídeos baixados, um a cada --intervalo-horas a partir de --inicio")
     parser.add_argument("--inicio", help='primeiro horário da --agenda, "AAAA-MM-DD HH:MM"')
     parser.add_argument("--intervalo-horas", type=float, default=24.0)
+    parser.add_argument("--horarios", nargs="+", metavar="HH:MM",
+                        help="vários vídeos por dia, um em cada horário (ex.: --horarios 12:00 19:00)")
     parser.add_argument("--redes", help="ex.: tiktok,instagram (padrão: PUBLICAR_REDES do .env)")
     parser.add_argument("--teste", action="store_true", help="mostra o que seria enviado, sem enviar")
     parser.add_argument("--status", nargs="+", metavar="DIA_OU_MP4",
@@ -519,11 +555,11 @@ def main(argv: list[str] | None = None) -> int:
                     if args.redes else networks_from_env())
         if args.agenda or args.agenda_videos:
             if not args.inicio:
-                parser.error('a agenda precisa de --inicio "AAAA-MM-DD HH:MM"')
-            start = parse_when(args.inicio)
+                parser.error('a agenda precisa de --inicio "AAAA-MM-DD HH:MM" (com --horarios, basta o dia)')
+            items = args.agenda or args.agenda_videos
+            start = parse_start(args.inicio) if args.horarios else parse_when(args.inicio)
             ok = True
-            for i, item in enumerate(args.agenda or args.agenda_videos):
-                when = start + timedelta(hours=args.intervalo_horas * i)
+            for item, when in zip(items, agenda_slots(start, len(items), args.intervalo_horas, args.horarios)):
                 results = (publish(item, networks, when, dry_run=args.teste) if args.agenda
                            else publish_file(item, networks, when, dry_run=args.teste))
                 ok &= _print(item if args.agenda else item.name, results)

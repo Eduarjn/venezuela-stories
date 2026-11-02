@@ -201,6 +201,24 @@ class PublishTest(unittest.TestCase):
         self.assertEqual(waiting.status_calls, [{"job_id": "job1"}])
         self.assertTrue(results[0].ok and "ainda não saiu" in results[0].detail)
 
+    def test_two_videos_per_day_one_at_each_time(self):
+        start = (datetime.now(BRT) + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+        session = FakeSession([FakeResponse(202, {"success": True, "job_id": "a"}),
+                               FakeResponse(202, {"success": True, "job_id": "b"})])
+        publicar.schedule([DAY, DAY2], start, times=["19:00", "12:00"], networks=["tiktok"],
+                          client=self.client(session), mark_published=self.marked.append)
+        expected = [start.replace(hour=12), start.replace(hour=19)]  # o mesmo dia, nos 2 horários
+        self.assertEqual([session.field(i, "scheduled_date") for i in (0, 1)],
+                         [e.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") for e in expected])
+
+    def test_agenda_slots_skip_what_already_passed_and_reject_bad_times(self):
+        now = datetime(2026, 11, 2, 13, 0, tzinfo=BRT)
+        slots = publicar.agenda_slots(datetime(2026, 11, 2, tzinfo=BRT), 3, times=["12:00", "19:00"], now=now)
+        self.assertEqual([s.strftime("%d %H:%M") for s in slots], ["02 19:00", "03 12:00", "03 19:00"])
+        self.assertEqual(publicar.parse_start("2026-11-03").strftime("%Y-%m-%d %H:%M"), "2026-11-03 00:00")
+        with self.assertRaises(publicar.PublishError):
+            publicar.agenda_slots(now, 2, times=["meio-dia"])
+
     def test_timeout_retries_once_with_the_same_key(self):
         session = FakeSession([ConnectionError("caiu"), done("tiktok")])
         results = self.run_publish(session, networks=["tiktok"])
