@@ -42,15 +42,17 @@ SFX_RULES = (
     ("rain", r"\b(chuvas?|chove|chovia|chovendo|garoa)\b"),
     ("explosion", r"\b(explos\w*|canh\w+|bombard\w*|batalhas?|guerras?|tiros?)\b"),
     ("impact", r"\b(bat(eu|e|eram)|colid\w*|colisao|choque|despencou|desab\w*|caiu|cairam|tomb\w*|"
-               r"afund\w*|derrub\w*|desmoron\w*)\b"),
+               r"afund\w*|derrub(ou|aram|ada|ado)|desmoron\w*)\b"),  # derrubar/derrubaria: intenção, não batida
     ("power_down", r"\b(pane|sem energia|apag(ou|aram|ao)|blecaute|desligou)\b"),
     ("helicopter", r"\bhelicopteros?\b"),
     ("plane", r"\b(aviao|avioes|piloto|sobrevo\w*|decol\w*|pous\w*|aterriss\w*|voo|voou|voar|aeroporto)\b"),
     ("ship_horn", r"\b(navios?|petroleiros?|barcos?|frotas?|porto|cargueiros?)\b"),
-    ("traffic", r"\b(pontes?|carros?|estradas?|transito|avenidas?)\b"),
+    ("traffic", r"\b(pontes?|carros?|estradas?|transito|avenidas?|engarrafamentos?|congestionamentos?|"
+                r"ruas travadas)\b"),
     ("river", r"\b(cachoeiras?|cataratas?|correntezas?|rios?|despencando|queda)\b"),
     ("waves", r"\b(mar|oceanos?|praias?|ondas?|lagos?|lagoas?)\b"),
-    ("crowd", r"\b(multidao|torcida|plateia|gente|moradores)\b"),
+    ("crowd", r"\b(multid(ao|oes)|torcidas?|plateias?|gente|moradores|compradores|estadios?|desfiles?|"
+              r"figurantes|festas?)\b"),
     ("writing", r"\b(anot\w*|diario|escrev\w*|cartas?|registr\w*|documentos?)\b"),
     ("camera", r"\b(fotos?|fotograf\w*|cameras?)\b"),
 )
@@ -79,8 +81,10 @@ def _plain(text: str) -> str:
     return "".join(c for c in text if not unicodedata.combining(c))
 
 
-# Nomes próprios que enganam as regras: "Rio" (a cidade) não é rio; "Rio Grande" também não.
-PROPER_NAMES = re.compile(r"\bRio( de Janeiro| Grande( do Sul| do Norte)?)?\b")
+# Nomes próprios que enganam as regras: "Rio" (a cidade) e os estados "Rio Grande do Sul/Norte"
+# não são rio. "Rio Amazonas" (Rio seguido de outro nome) continua sendo rio. Vale só para o
+# texto original: depois de _plain tudo vira minúscula e a cidade some na palavra "rio".
+PROPER_NAMES = re.compile(r"\bRio\b( de Janeiro| Grande do (Sul|Norte)|(?! [A-ZÀ-Ý]))")
 
 
 def content_sfx(narration: str) -> list[str]:
@@ -92,7 +96,8 @@ def content_sfx(narration: str) -> list[str]:
 def direct(scenes: list[dict]) -> list[SceneEffects]:
     """Efeitos de cada cena, na ordem das cenas."""
     n = len(scenes)
-    texts = [_plain(s.get("narration_text", "")).strip() for s in scenes]
+    raw = [s.get("narration_text", "").strip() for s in scenes]
+    texts = [_plain(t) for t in raw]
     stormy = sum(bool(re.search(SFX_RULES[0][1], t)) for t in texts) >= max(2, n // 4)
     sfx_cap = max(2, math.ceil(n * 0.2))
     caps = {"thunder": max(sfx_cap, math.ceil(n * 0.3)) if stormy else 2,
@@ -109,7 +114,7 @@ def direct(scenes: list[dict]) -> list[SceneEffects]:
         # Som
         sfx = None
         if not death and not CALL_TO_ACTION.match(text):  # morte e "siga": só voz e música
-            wanted = content_sfx(text) + (["clock"] if time_jump else []) + (["riser"] if text.endswith("?") else [])
+            wanted = content_sfx(raw[i]) + (["clock"] if time_jump else []) + (["riser"] if text.endswith("?") else [])
             if i == 0:
                 wanted = [c for c in wanted if c not in BEDS] + ["boom"]  # o gancho entra com peso
             allowed = [c for c in wanted

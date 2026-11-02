@@ -40,6 +40,21 @@ class DirectorTest(unittest.TestCase):
         self.assertNotIn("river", content_sfx("Dom Pedro estava em Petrópolis e desceu para o Rio."))
         self.assertNotIn("river", content_sfx("Na Câmara Municipal do Rio de Janeiro, à noite."))
         self.assertEqual(content_sfx("Onde o rio Catatumbo deságua no lago")[0], "river")
+        self.assertEqual(content_sfx("O Rio Amazonas corta a floresta.")[0], "river")
+        # Só o que aconteceu bate: "derrubou" sim, "queriam derrubar" e "derrubaria?" não.
+        self.assertEqual(content_sfx("Diante das tropas, derrubou o gabinete.")[0], "impact")
+        self.assertNotIn("impact", content_sfx("Os militares queriam derrubar o chefe do governo."))
+        self.assertNotIn("impact", content_sfx("Amigo do imperador... então por que derrubaria o Império?"))
+        self.assertEqual(content_sfx("Nessa sexta, multidões de compradores invadiam o centro.")[0], "crowd")
+        self.assertEqual(content_sfx("Calçadas lotadas. Um engarrafamento atrás do outro.")[0], "traffic")
+        self.assertEqual(content_sfx("Mais de mil figurantes fantasiados lotaram o centro.")[0], "crowd")
+
+    def test_the_city_of_rio_has_no_river_sound_in_the_final_cut(self):
+        # O diretor recebe o texto cru: a cidade não pode virar "rio" depois da minúscula.
+        effects = direct(scenes("O Império caiu numa noite.", "Dom Pedro estava em Petrópolis e desceu para o Rio.",
+                                "Na Câmara Municipal do Rio, a República foi declarada.",
+                                "Rio de Janeiro amanheceu em silêncio."))
+        self.assertNotIn("river", [e.sfx for e in effects])
 
     def test_no_thunder_or_lightning_flash_without_a_storm(self):
         effects = direct(PONTE)
