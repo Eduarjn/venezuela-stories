@@ -183,7 +183,7 @@ class WikimediaSource:
                 page_url=info.get("descriptionurl") or "",
                 title=title,
                 author=_strip_html(value("Artist")) or _strip_html(value("Credit")),
-                license=value("LicenseShortName") or ("Public domain" if kind == "pd" else kind.upper()),
+                license=value("LicenseShortName") or ("Public domain" if license_kind == "pd" else license_kind.upper()),
                 license_url=value("LicenseUrl"),
                 width=int(info.get("width") or 0),
                 height=int(info.get("height") or 0),
@@ -234,11 +234,18 @@ def share_alike_allowed() -> bool:
 
 def wikimedia_video(ref: str, allow_share_alike: bool = False,
                     get_json: Callable[[str, dict, dict], dict] = _get_json) -> tuple[Candidate, list[str]]:
-    """Filmagem real do Wikimedia Commons, pelo nome ("File:X.webm") ou pelo link da página.
+    """Filmagem real do Wikimedia Commons, pelo nome ("File:X.webm") ou pelo link da página."""
+    return wikimedia_media(ref, allow_share_alike, get_json, kind="video")
+
+
+def wikimedia_media(ref: str, allow_share_alike: bool = False,
+                    get_json: Callable[[str, dict, dict], dict] = _get_json,
+                    kind: str = "video") -> tuple[Candidate, list[str]]:
+    """Vídeo (kind="video") ou som (kind="audio") do Wikimedia Commons, pelo nome ou link.
 
     Devolve o crédito e as URLs para baixar, da melhor para a pior: o original primeiro (o
-    Commons costuma limitar originais com 429) e depois as versões convertidas até 1080p.
-    Mesma regra de licença das imagens: nada de NC/ND; CC BY-SA só com allow_share_alike.
+    Commons costuma limitar originais com 429) e depois as versões convertidas (vídeo: até
+    1080p). Mesma regra de licença das imagens: nada de NC/ND; CC BY-SA só com allow_share_alike.
     """
     name = ref.split("/wiki/", 1)[-1].split("?", 1)[0].split("#", 1)[0]
     title = unquote(name).replace("_", " ").strip()
@@ -252,17 +259,20 @@ def wikimedia_video(ref: str, allow_share_alike: bool = False,
     info = (page.get("videoinfo") or [None])[0]
     if not info:
         raise ValueError(f"{title}: arquivo não encontrado no Wikimedia Commons")
-    if not str(info.get("mime", "")).startswith("video/"):
-        raise ValueError(f"{title}: não é vídeo ({info.get('mime')})")
+    mime = str(info.get("mime", ""))
+    if kind == "video" and not mime.startswith("video/"):
+        raise ValueError(f"{title}: não é vídeo ({mime})")
+    if kind == "audio" and not (mime.startswith("audio/") or mime == "application/ogg"):
+        raise ValueError(f"{title}: não é som ({mime})")
     meta = info.get("extmetadata") or {}
     value = lambda key: (meta.get(key) or {}).get("value") or ""  # noqa: E731
-    kind = classify_license(value("License"), value("LicenseShortName"))
-    if kind is None:
+    license_kind = classify_license(value("License"), value("LicenseShortName"))
+    if license_kind is None:
         raise ValueError(f"{title}: licença não permite uso ({value('LicenseShortName') or 'sem licença'})")
-    if kind == "by-sa" and not allow_share_alike:
+    if license_kind == "by-sa" and not allow_share_alike:
         raise ValueError(f"{title}: licença CC BY-SA; só com ALLOW_SHARE_ALIKE=1 no .env")
     converted = sorted((d for d in info.get("derivatives") or []
-                        if d.get("src") and 0 < int(d.get("height") or 0) <= 1080),
+                        if d.get("src") and (kind == "audio" or 0 < int(d.get("height") or 0) <= 1080)),
                        key=lambda d: int(d.get("height") or 0), reverse=True)
     urls = list(dict.fromkeys(u.split("?", 1)[0] for u in [info.get("url") or ""] + [d["src"] for d in converted]
                               if u))
@@ -272,12 +282,12 @@ def wikimedia_video(ref: str, allow_share_alike: bool = False,
         page_url=info.get("descriptionurl") or "",
         title=re.sub(r"^File:|\.[a-zA-Z0-9]+$", "", page.get("title") or title).strip(),
         author=_strip_html(value("Artist")) or _strip_html(value("Credit")),
-        license=value("LicenseShortName") or ("Public domain" if kind == "pd" else kind.upper()),
+        license=value("LicenseShortName") or ("Public domain" if license_kind == "pd" else license_kind.upper()),
         license_url=value("LicenseUrl"),
         width=int(info.get("width") or 0),
         height=int(info.get("height") or 0),
-        attribution_required=kind != "pd",
-        kind="Vídeo",
+        attribution_required=license_kind != "pd",
+        kind="Vídeo" if kind == "video" else "Som",
     )
     return candidate, urls
 

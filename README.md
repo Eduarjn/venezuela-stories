@@ -198,10 +198,7 @@ Coloque seus arquivos (com licença de uso):
 | `assets/music/` | trilhas de suspense/históricas (`.mp3/.wav/.m4a`); cada episódio usa uma, alternando |
 | `assets/fonts/` | opcional: `.ttf/.otf` da fonte das legendas (defina `SUBTITLE_FONT` com o nome dela) |
 
-Sem arquivos? `python setup_assets.py` sintetiza com FFmpeg os 5 efeitos (`{cue}_synth.wav`) e um
-drone de tensão de 64 s (`tension_drone_synth.wav`), sem direitos de terceiros. Seus arquivos
-sempre têm prioridade sobre os sintéticos e nunca são sobrescritos; `--list` mostra o que o editor
-vai usar. O drone serve para testar — troque por uma trilha real com licença.
+Sem arquivos? `python setup_assets.py` baixa do Wikimedia Commons gravações reais em domínio público/CC0 (trovão, chuva, buzina de navio, avião, helicóptero, carros, correnteza, ondas, multidão, relógio, caneta, câmera, explosão), corta os melhores trechos e sintetiza com FFmpeg os efeitos "desenhados" (whoosh, sobe-tensão, impacto, pane) e uma versão de reserva de cada efeito. Rode uma vez com internet. Que efeito entra em cada cena é decidido por `efeitos.py`, pelo texto da narração: trovão só com raio ou tempestade, nada repetido em cenas seguidas. Também gera um drone de tensão de 64 s (`tension_drone_synth.wav`). Seus arquivos (ex.: `thunder.mp3`) sempre vêm antes e nunca são sobrescritos; `--list` mostra o que o editor vai usar. O drone serve para testar — troque por uma trilha real com licença.
 
 O que o editor faz:
 

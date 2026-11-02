@@ -22,6 +22,9 @@ Arquitetura e comandos completos: `README.md`.
 - Testar uma busca sem baixar: `python visual_generator.py --search "Lake Maracaibo"`.
 - Busca genérica (toda em minúsculas) vai ao Wikimedia com "Venezuela" no fim (`IMAGE_REGION`);
   o `--search` mostra a busca que realmente roda.
+- Efeitos (som, transição, movimento) saem do texto de cada cena em `efeitos.py`: trovão e
+  clarão só com raio/tempestade, nada repetido em cenas seguidas, corte seco como padrão.
+  Gravações reais: `python setup_assets.py` (uma vez, com internet); `--list` mostra o que há.
 
 ## Revisão antes de publicar (sempre)
 1. Leia a seção REVISÃO no fim de `output\AAAA-MM-DD\post_copy.txt` (cena -> imagem).

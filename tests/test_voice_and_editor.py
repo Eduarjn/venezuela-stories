@@ -27,7 +27,6 @@ from video_editor import (  # noqa: E402
     ducking_expression,
     find_sfx,
     speech_regions,
-    transition_for,
 )
 from voice_engine import (  # noqa: E402
     LEAD_SECONDS,
@@ -245,16 +244,28 @@ class EditorUnitTest(unittest.TestCase):
     def test_sfx_aliases_find_user_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             sfx = Path(tmp)
-            (sfx / "riser.mp3").write_bytes(b"x")
-            (sfx / "impact.wav").write_bytes(b"x")
-            self.assertEqual(find_sfx("suspense_riser", sfx).name, "riser.mp3")
-            self.assertEqual(find_sfx("thunder", sfx).name, "impact.wav")
-            self.assertIsNone(find_sfx("crowd_murmur", sfx))
+            (sfx / "suspense_riser.mp3").write_bytes(b"x")
+            (sfx / "crash.wav").write_bytes(b"x")
+            self.assertEqual(find_sfx("riser", sfx).name, "suspense_riser.mp3")  # nome antigo ainda vale
+            self.assertEqual(find_sfx("impact", sfx).name, "crash.wav")
+            self.assertIsNone(find_sfx("thunder", sfx))  # batida não serve de trovão
+            self.assertIsNone(find_sfx("crowd", sfx))
 
-    def test_transitions(self):
-        self.assertIsNone(transition_for(0, "whoosh"))
-        self.assertEqual(transition_for(3, "whoosh"), "whip")
-        self.assertEqual(transition_for(3, "thunder"), "flash")
+    def test_sound_variants_alternate_recordings_and_synthetic_is_only_a_fallback(self):
+        from video_editor import sfx_variants
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sfx = Path(tmp)
+            for name in ("thunder_synth.wav", "thunder_lib_a1b2c3_2.wav", "thunder_lib_a1b2c3_1.wav",
+                         "suspense_riser_synth.wav", "riser_synth2.wav"):
+                (sfx / name).write_bytes(b"x")
+            self.assertEqual([p.name for p in sfx_variants("thunder", sfx)],
+                             ["thunder_lib_a1b2c3_1.wav", "thunder_lib_a1b2c3_2.wav"])
+            self.assertEqual([p.name for p in sfx_variants("riser", sfx)],
+                             ["riser_synth2.wav", "suspense_riser_synth.wav"])
+            (sfx / "thunder.mp3").write_bytes(b"meu")  # arquivo seu vem primeiro
+            self.assertEqual(find_sfx("thunder", sfx).name, "thunder.mp3")
+            self.assertEqual(sfx_variants("plane", sfx), [])
 
     def test_changed_image_renders_a_new_clip_and_drops_the_old_one(self):
         # --redo-images troca a imagem com a mesma duração: o clipe antigo não pode ser reaproveitado.
@@ -292,7 +303,8 @@ class EditorUnitTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "out" / DAY.isoformat()).mkdir(parents=True)
-            scenes = [{"scene_id": i, "narration_text": "Um dois", "motion_type": "slow_ken_burns",
+            falas = {1: "Um dois", 2: "Em 1999 tudo mudou", 3: "Os raios caem"}
+            scenes = [{"scene_id": i, "narration_text": falas[i], "motion_type": "slow_ken_burns",
                        "sfx_cue": "thunder"} for i in (1, 2, 3)]
             (root / "out" / DAY.isoformat() / "current_episode.json").write_text(
                 json.dumps({"topic_id": 7, "scenes": scenes}), encoding="utf-8")
@@ -314,8 +326,8 @@ class EditorUnitTest(unittest.TestCase):
                 _, plans, work = editor.plan(DAY)
                 self.assertIsNone(plans[0].video)
                 self.assertEqual((plans[1].video.name, plans[1].video_start, plans[1].transition),
-                                 ("v.webm", 1.5, "flash"))
-                # A cena 3 continua do ponto onde a 2 parou, sem flash no meio da filmagem.
+                                 ("v.webm", 1.5, "dip"))
+                # A cena 3 continua do ponto onde a 2 parou: sem o clarão do raio no meio da filmagem.
                 self.assertEqual((plans[2].video_start, plans[2].transition), (1.5 + plans[1].duration, None))
 
                 rendered = []
@@ -346,7 +358,7 @@ class EndToEndTest(unittest.TestCase):
         scenes = [
             {"scene_id": 1, "narration_text": "Um lago acende", "motion_type": "zoom_in_fast",
              "sfx_cue": "thunder", "image_prompt": "x"},
-            {"scene_id": 2, "narration_text": "Em 1999 tudo", "motion_type": "pan_left_to_right",
+            {"scene_id": 2, "narration_text": "Em 1999 a chuva caiu", "motion_type": "pan_left_to_right",
              "sfx_cue": "whoosh", "image_prompt": "x"},
             {"scene_id": 3, "narration_text": "Ninguém sabia porquê", "motion_type": "shake_impact",
              "sfx_cue": "suspense_riser", "image_prompt": "x"},
@@ -359,8 +371,9 @@ class EndToEndTest(unittest.TestCase):
         for i, color in enumerate([(60, 30, 20), (20, 40, 70), (30, 60, 30)], start=1):
             Image.new("RGB", (1080, 1920), color).save(visuals / f"scene_{i:02d}.png")
 
-        for name, kind in [("whoosh", "anoisesrc=d=0.4:a=0.3"), ("impact", "sine=f=60:d=0.5"),
-                           ("riser", "sine=f=500:d=0.8")]:
+        # boom: efeito curto do gancho; rain: ambiente (em loop sob a cena 2, que dura mais).
+        for name, kind in [("whoosh", "anoisesrc=d=0.4:a=0.3"), ("boom", "sine=f=60:d=0.5"),
+                           ("rain", "anoisesrc=d=1.0:a=0.2")]:
             (cls.assets / "sfx").mkdir(parents=True, exist_ok=True)
             subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", kind,
                             str(cls.assets / "sfx" / f"{name}.mp3")], check=True)
@@ -405,7 +418,9 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual((video["width"], video["height"], video["r_frame_rate"]), (1080, 1920, "30/1"))
         render = json.loads((self.episodes / "42" / "edit" / "render.json").read_text())
         self.assertAlmostEqual(float(info["format"]["duration"]), render["duration_seconds"], delta=0.06)
-        self.assertEqual([s["transition"] for s in render["scenes"]], [None, "whip", "flash"])
+        # Corte seco no gancho, mergulho no preto no salto no tempo ("Em 1999") e corte seco.
+        self.assertEqual([s["transition"] for s in render["scenes"]], [None, "dip", None])
+        self.assertEqual([s["sfx_cue"] for s in render["scenes"]], ["boom", "rain", None])
         for scene in render["scenes"]:
             self.assertEqual(scene["frames"], round(scene["duration"] * 30))
 

@@ -13,8 +13,9 @@ O que faz:
 1. Sincronia: cada cena dura exatamente o tempo da fala (arredondado para frames
    inteiros); o áudio de cada cena é completado até o mesmo número de frames.
    Os silêncios longos já foram cortados pelo voice_engine.
-2. Transições: whip pan (cenas com sfx_cue "whoosh") ou flash sutil, com o efeito
-   sonoro da cena entrando no corte.
+2. Efeitos (efeitos.py): o som, a transição e o movimento de cada cena saem do que a
+   narração conta e não se repetem em cenas seguidas. Corte seco é o padrão; efeito
+   curto entra no corte, som de ambiente (chuva, carros, avião) fica baixo sob a cena.
 3. Trilha com ducking: a música cai -18 dB enquanto o narrador fala e volta
    nas pausas maiores, com rampas de 0,15 s.
 4. Legendas: 2 a 4 palavras por vez, centralizadas na altura dos olhos, fonte
@@ -44,6 +45,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from efeitos import BEDS, direct
 from visual_generator import FPS, HEIGHT, WIDTH, render_clip, render_video_clip
 
 log = logging.getLogger("video_editor")
@@ -56,7 +58,6 @@ DUCK_DB = -18.0           # quanto a música cai enquanto há fala
 MUSIC_BASE_DB = -6.0      # volume da música (sem fala) em relação ao arquivo original
 DUCK_RAMP_SECONDS = 0.15
 SPEECH_MERGE_GAP = 0.6    # pausas menores que isso não "levantam" a música
-SFX_DB = -8.0
 SFX_LEAD_SECONDS = 0.08   # o efeito começa um pouco antes do corte
 TARGET_LUFS = -14         # padrão de TikTok/Reels/Shorts
 
@@ -83,13 +84,33 @@ YELLOW = "&H0000D7FF&"    # ASS usa BGR: #FFD700
 RED = "&H00303BFF&"       # #FF3B30
 WHITE = "&H00FFFFFF&"
 
+# Nomes de arquivo (sem extensão) que valem para cada efeito em assets/sfx/: os seus
+# primeiro (ex.: "thunder.mp3"), depois as gravações baixadas ({efeito}_lib_*.wav) e, só
+# quando não há nenhuma das duas, os sintéticos ({nome}_synth*.wav).
 SFX_ALIASES = {
+    "boom": ["boom", "hit"],
+    "impact": ["impact", "crash", "thud"],
+    "thunder": ["thunder"],
+    "explosion": ["explosion"],
+    "ship_horn": ["ship_horn", "horn", "foghorn"],
+    "camera": ["camera", "shutter"],
+    "writing": ["writing", "pen"],
+    "clock": ["clock", "tick", "old_film_click"],
     "whoosh": ["whoosh"],
-    "thunder": ["thunder", "impact"],
-    "suspense_riser": ["suspense_riser", "riser"],
-    "old_film_click": ["old_film_click", "click", "film_click"],
-    "crowd_murmur": ["crowd_murmur", "crowd", "murmur"],
+    "riser": ["riser", "suspense_riser"],
+    "power_down": ["power_down"],
+    "rain": ["rain"],
+    "river": ["river", "waterfall"],
+    "waves": ["waves", "water"],
+    "traffic": ["traffic", "cars"],
+    "crowd": ["crowd", "crowd_murmur", "murmur"],
+    "plane": ["plane", "airplane"],
+    "helicopter": ["helicopter"],
 }
+SFX_DB = -8.0             # efeito curto, em relação ao arquivo normalizado
+SFX_CUE_DB = {"ship_horn": -5.0, "power_down": -2.0, "clock": 3.0}  # som longo mais baixo, tique mais alto
+BED_DB = -6.0             # ambiente (já gravado baixo), sob a voz
+BED_FADE_SECONDS = 0.3
 AUDIO_EXTENSIONS = (".mp3", ".wav", ".m4a", ".ogg", ".flac")
 
 
@@ -115,13 +136,14 @@ class ScenePlan:
     image: Path
     audio: Path
     motion: str
-    sfx_cue: str
+    sfx_cue: str | None
     transition: str | None
     frames: int
     start: float          # início da cena no vídeo final (s)
     words: list[TimedWord]  # tempo absoluto no vídeo final
     video: Path | None = None  # filmagem real no lugar da imagem (visuals/videos.json)
     video_start: float = 0.0   # segundo da filmagem onde a cena começa
+    sfx_variant: int = 0       # qual gravação do efeito (cada repetição usa outra)
 
     @property
     def duration(self) -> float:
@@ -155,22 +177,23 @@ def ffmpeg_threads() -> list[str]:
     return ["-threads", threads] if threads else []
 
 
-def transition_for(scene_index: int, sfx_cue: str) -> str | None:
-    if scene_index == 0:
-        return None  # o hook entra seco
-    return "whip" if sfx_cue == "whoosh" else "flash"
+def sfx_variants(cue: str, sfx_dir: Path) -> list[Path]:
+    """Arquivos do efeito, na ordem em que o editor os alterna: os seus, as gravações
+    baixadas pelo setup_assets.py e, só sem nenhuma delas, os sintéticos."""
+    names = SFX_ALIASES.get(cue, [cue])
+    audio = lambda paths: sorted(p for p in paths if p.suffix.lower() in AUDIO_EXTENSIONS)  # noqa: E731
+    own = [sfx_dir / f"{name}{ext}" for name in names for ext in AUDIO_EXTENSIONS
+           if (sfx_dir / f"{name}{ext}").exists()]
+    recorded = audio(sfx_dir.glob(f"{cue}_lib_*"))
+    if own or recorded:
+        return own + recorded
+    return list(dict.fromkeys(p for name in names for p in audio(sfx_dir.glob(f"{name}_synth*"))))
 
 
 def find_sfx(cue: str, sfx_dir: Path) -> Path | None:
-    """Arquivo do efeito: primeiro os seus (whoosh.mp3, impact.wav...), por último o
-    sintético gerado pelo setup_assets.py ({cue}_synth.wav)."""
-    names = SFX_ALIASES.get(cue, [cue])
-    for name in [*names, f"{cue}_synth"]:
-        for ext in AUDIO_EXTENSIONS:
-            candidate = sfx_dir / f"{name}{ext}"
-            if candidate.exists():
-                return candidate
-    return None
+    """O primeiro arquivo do efeito (ou None)."""
+    files = sfx_variants(cue, sfx_dir)
+    return files[0] if files else None
 
 
 def pick_music(music_dir: Path, episode_id: int) -> Path | None:
@@ -428,6 +451,7 @@ class VideoEditor:
         plans: list[ScenePlan] = []
         cursor = 0.0
         videos = load_scene_videos(base / "visuals")
+        effects = direct(episode["scenes"])
         previous_file, previous_end = None, 0.0  # filmagem da cena anterior, para continuar
         for index, scene in enumerate(episode["scenes"]):
             sid = scene["scene_id"]
@@ -442,7 +466,8 @@ class VideoEditor:
             words = mark_sentence_ends(
                 [TimedWord(w["text"], cursor + w["start"], cursor + w["end"]) for w in voice["words"]],
                 scene.get("narration_text", ""))
-            transition = transition_for(index, scene["sfx_cue"])
+            fx = effects[index]
+            transition = fx.transition
             video, video_start = None, 0.0
             entry = videos.get(sid)
             if entry:
@@ -455,9 +480,9 @@ class VideoEditor:
                     video_start, transition = previous_end, None
             previous_file = entry["file"] if entry else None
             previous_end = video_start + frames / FPS
-            plans.append(ScenePlan(sid, image, base / "audio" / voice["audio"], scene["motion_type"],
-                                   scene["sfx_cue"], transition, frames, cursor, words,
-                                   video, video_start))
+            plans.append(ScenePlan(sid, image, base / "audio" / voice["audio"], fx.motion,
+                                   fx.sfx, transition, frames, cursor, words,
+                                   video, video_start, fx.sfx_variant))
             cursor += frames / FPS
         return episode, plans, base / "edit"
 
@@ -470,7 +495,8 @@ class VideoEditor:
             # O nome inclui o conteúdo da imagem (ou da filmagem e o trecho): trocar refaz o clipe.
             source = p.video.read_bytes() + f"@{p.video_start:.3f}".encode() if p.video else p.image.read_bytes()
             digest = ("v" if p.video else "") + hashlib.sha1(source).hexdigest()[:10]
-            clip = work / f"clip_{p.scene_id:02d}_{p.frames}f_{p.transition or 'cut'}_{digest}.mp4"
+            motion = "real" if p.video else p.motion
+            clip = work / f"clip_{p.scene_id:02d}_{p.frames}f_{motion}_{p.transition or 'cut'}_{digest}.mp4"
             if not clip.exists():
                 log.info("Cena %s: %.2fs, %s, transição %s", p.scene_id, p.duration,
                          f"filmagem real a partir de {p.video_start:.2f}s" if p.video else p.motion,
@@ -530,15 +556,26 @@ class VideoEditor:
 
         missing_sfx = set()
         for p in plans:
-            sfx = find_sfx(p.sfx_cue, self.assets_dir / "sfx")
-            if sfx is None:
+            if not p.sfx_cue:
+                continue
+            files = sfx_variants(p.sfx_cue, self.assets_dir / "sfx")
+            if not files:
                 missing_sfx.add(p.sfx_cue)
                 continue
-            delay_ms = max(0, round((p.start - SFX_LEAD_SECONDS) * 1000))
-            inputs += ["-i", str(sfx.resolve())]
+            sfx = files[p.sfx_variant % len(files)]
             label = f"[sfx{p.scene_id}]"
-            graph.append(f"[{next_input}:a]aresample={SAMPLE_RATE},volume={SFX_DB}dB,"
-                         f"adelay={delay_ms}:all=1{label}")
+            if p.sfx_cue in BEDS:  # ambiente: baixo, a cena inteira, entrando e saindo suave
+                fade_out = max(0.0, p.duration - BED_FADE_SECONDS)
+                inputs += ["-stream_loop", "-1", "-i", str(sfx.resolve())]
+                graph.append(f"[{next_input}:a]aresample={SAMPLE_RATE},atrim=end={p.duration:.3f},"
+                             f"afade=t=in:d={BED_FADE_SECONDS},afade=t=out:st={fade_out:.3f}:d={BED_FADE_SECONDS},"
+                             f"volume={BED_DB}dB,adelay={round(p.start * 1000)}:all=1{label}")
+            else:
+                delay_ms = max(0, round((p.start - SFX_LEAD_SECONDS) * 1000))
+                inputs += ["-i", str(sfx.resolve())]
+                graph.append(f"[{next_input}:a]aresample={SAMPLE_RATE},"
+                             f"volume={SFX_DB + SFX_CUE_DB.get(p.sfx_cue, 0.0)}dB,"
+                             f"adelay={delay_ms}:all=1{label}")
             audio_labels.append(label)
             next_input += 1
         if missing_sfx:
@@ -577,7 +614,8 @@ class VideoEditor:
             "duration_seconds": round(sum(p.duration for p in plans), 3),
             "scenes": [{"scene_id": p.scene_id, "start": round(p.start, 3),
                         "duration": round(p.duration, 3), "frames": p.frames,
-                        "transition": p.transition, "sfx_cue": p.sfx_cue,
+                        "motion": "real" if p.video else p.motion, "transition": p.transition,
+                        "sfx_cue": p.sfx_cue, "sfx_variant": p.sfx_variant,
                         **({"video": p.video.name, "video_start": round(p.video_start, 3)}
                            if p.video else {})} for p in plans],
             "output": str(output),

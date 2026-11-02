@@ -64,8 +64,14 @@ STYLE_ANCHOR = (
     "film grain, 9:16 vertical composition"
 )
 
-MotionType = Literal["zoom_in_fast", "pan_left_to_right", "shake_impact", "slow_ken_burns", "pulse_glow"]
-SfxCue = Literal["whoosh", "thunder", "old_film_click", "suspense_riser", "crowd_murmur"]
+MotionType = Literal["zoom_in_fast", "pan_left_to_right", "shake_impact", "slow_ken_burns", "pulse_glow",
+                     "tilt_down", "pan_right_to_left", "zoom_out_slow"]
+# Sugestão do roteiro; o efeito final sai do texto da cena (efeitos.py). Os 5 primeiros são
+# os nomes antigos, aceitos para os episódios já gerados.
+SfxCue = Literal["whoosh", "thunder", "old_film_click", "suspense_riser", "crowd_murmur",
+                 "none", "boom", "impact", "explosion", "ship_horn", "camera", "writing", "clock",
+                 "riser", "power_down", "rain", "river", "waves", "traffic", "crowd", "plane",
+                 "helicopter"]
 Language = Literal["pt-BR", "es-419"]
 
 BANNED_OPENINGS = {
@@ -273,8 +279,13 @@ IMAGENS
 - No image_prompt (imagem gerada por IA), nunca o rosto de uma pessoa real identificável:
   use silhueta, de costas, multidão, objetos ou lugares.
 
-motion_type permitido: zoom_in_fast, pan_left_to_right, shake_impact, slow_ken_burns, pulse_glow.
-sfx_cue permitido: whoosh, thunder, old_film_click, suspense_riser, crowd_murmur.
+motion_type permitido: zoom_in_fast, pan_left_to_right, pan_right_to_left, slow_ken_burns,
+zoom_out_slow, tilt_down (cachoeira, queda, algo alto), shake_impact (só batida, queda, explosão),
+pulse_glow. Varie: nunca o mesmo em cenas seguidas.
+sfx_cue: o som que a cena mostra ou conta, ou "none" (muitas cenas ficam só com a voz):
+thunder (só raio/tempestade), rain, impact (batida, queda), explosion, ship_horn, plane,
+helicopter, traffic, river, waves, crowd, writing, camera, clock (salto no tempo), riser
+(pergunta, suspense), power_down (algo apaga), boom (só no gancho). Nunca o mesmo em cenas seguidas.
 
 SAÍDA: responda SOMENTE com um objeto JSON válido (sem markdown, sem texto antes ou depois)."""
 

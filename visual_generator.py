@@ -73,7 +73,8 @@ IMAGE_PROMPT_SUFFIX = (
     "No identifiable face of a real person."
 )
 
-MOTION_TYPES = ("zoom_in_fast", "pan_left_to_right", "shake_impact", "slow_ken_burns", "pulse_glow")
+MOTION_TYPES = ("zoom_in_fast", "pan_left_to_right", "shake_impact", "slow_ken_burns", "pulse_glow",
+                "tilt_down", "pan_right_to_left", "zoom_out_slow")
 
 # Acabamento de documentário: vinheta que "respira", leve tremulação de brilho de
 # projetor antigo e granulação de filme que muda a cada frame.
@@ -91,6 +92,10 @@ TRANSITIONS = {
     "flash": "eq=brightness='0.35*max(0,1-t/0.12)':eval=frame",
     # Whip pan: borrão horizontal forte nos primeiros 0,14 s.
     "whip": "gblur=sigma=45:sigmaV=0.01:enable='lt(t,0.14)'",
+    # Mergulho no preto: a cena nasce do preto em 0,3 s (salto no tempo, notícia triste).
+    "dip": "fade=t=in:st=0:d=0.3",
+    # Soco: zoom que entra forte e assenta em 0,22 s (no motion_filter) + brilho curto.
+    "punch": "eq=brightness='0.15*max(0,1-t/0.08)':eval=frame",
 }
 
 
@@ -160,9 +165,23 @@ def motion_filter(motion: str, duration: float, fps: int = FPS,
         z = "1.12"
         x = f"(W-W/({{z}}))/2+35*sin(on*1.9)*{decay}"
         y = f"(H-H/({{z}}))/2+27.5*cos(on*2.7)*{decay}"
+    elif motion == "tilt_down":
+        # A câmera desce devagar (cachoeira, queda, algo alto).
+        z = "1.18"
+        x = center_x
+        y = f"(H-H/({{z}}))*on/{n}"
+    elif motion == "pan_right_to_left":
+        z = "1.2"
+        x = f"(W-W/({{z}}))*(1-on/{n})"
+        y = center_y
+    elif motion == "zoom_out_slow":
+        z = f"1.22-0.16*on/{n}"
+        x, y = center_x, center_y
     else:  # pulse_glow
         z = f"1.03+0.05*on/{n}"
         x, y = center_x, center_y
+    if transition == "punch":
+        z = f"({z})*(1+0.14*max(0,1-on/{max(1, round(fps * 0.22))}))"
 
     x0, y0 = x.format(z=z), y.format(z=z)
     x1, y1 = f"{x0}+W/({z})", f"{y0}+H/({z})"

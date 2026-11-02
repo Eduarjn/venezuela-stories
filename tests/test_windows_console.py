@@ -39,7 +39,7 @@ class WindowsConsoleTest(unittest.TestCase):
             sfx, music = Path(tmp) / "sfx", Path(tmp) / "music"
             sfx.mkdir()
             (sfx / "impact.mp3").write_bytes(b"x")  # caminho que imprime "usa seu arquivo"
-            setup_assets.setup(sfx, music)
+            setup_assets.setup(sfx, music, library=False)
             setup_assets.report(sfx, music)
             cp1252_stdout.flush()
         self.assertIn(b"[OK]", cp1252_stdout.buffer.getvalue())
