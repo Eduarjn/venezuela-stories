@@ -260,14 +260,27 @@ def _lines(words: list[str]) -> list[list[int]]:
     return lines
 
 
+def _spoken_parts(text: str) -> list[str]:
+    """Palavras do bloco; nome composto maior que a linha ("Chaumont-devant-Damvillers")
+    é partido nos hífens, com o hífen no fim de cada pedaço ("CHAUMONT- / DEVANT-")."""
+    parts: list[str] = []
+    for part in text.split():
+        if len(part) > SUB_MAX_LINE_CHARS and "-" in part.strip("-"):
+            pieces = part.split("-")
+            parts += [piece + "-" for piece in pieces[:-1] if piece] + [pieces[-1]]
+        else:
+            parts.append(part)
+    return [part for part in parts if part]
+
+
 def split_spoken_groups(words: list[TimedWord]) -> list[TimedWord]:
     """O edge-tts devolve número com o que vem junto como um bloco só ("Em 29 de outubro de
     2016", "70 quilômetros por segundo"). Uma "palavra" maior que a linha da legenda não
     quebra e corta nas bordas do vídeo. Aqui o bloco vira palavras, com o tempo do bloco
-    dividido pelo tamanho de cada uma."""
+    dividido pelo tamanho de cada uma; nome composto comprido é partido nos hífens."""
     result: list[TimedWord] = []
     for word in words:
-        parts = word.text.split()
+        parts = _spoken_parts(word.text)
         if len(parts) < 2:
             result.append(word)
             continue

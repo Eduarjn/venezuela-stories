@@ -274,6 +274,8 @@ PRONUNCIATION_PT = {
 }
 # Nomes com "ll" que não são espanhóis (a regra "ll" -> "y" não vale para eles).
 LL_EXCEPTIONS = {"hollywood", "bill", "wall", "mallory", "kellogg", "lloyd", "william", "williams"}
+# Terminações francesas: em "Damvillers" ou "Deauville" o "ll" soa "l", não "y".
+LL_FRENCH_ENDINGS = ("ville", "villes", "villers", "villiers")
 _CAPITALIZED = re.compile(r"\b[A-ZÁÉÍÓÚÂÊÔÃÕÇÑ][\wÀ-ÿ]*")
 
 
@@ -295,7 +297,8 @@ def pronunciation_text(text: str, language: str) -> tuple[str, dict[str, str]]:
     def fix(match: re.Match) -> str:
         word = match.group(0)
         spoken = PRONUNCIATION_PT.get(word)
-        if spoken is None and "ll" in word.lower() and _norm(word) not in LL_EXCEPTIONS:
+        if (spoken is None and "ll" in word.lower() and _norm(word) not in LL_EXCEPTIONS
+                and not _norm(word).endswith(LL_FRENCH_ENDINGS)):
             spoken = word.replace("ll", "y").replace("Ll", "Y").replace("LL", "Y")
         if spoken is None or spoken == word:
             return word
@@ -306,9 +309,18 @@ def pronunciation_text(text: str, language: str) -> tuple[str, dict[str, str]]:
 
 
 def restore_spelling(words: list["Word"], restore: dict[str, str]) -> list["Word"]:
+    """Devolve a grafia original às palavras do TTS, também dentro de um bloco ("Em Padiya",
+    "Chaumont-devant-Damviyers"): o edge-tts às vezes junta várias palavras num item só."""
     if not restore:
         return words
-    return [replace(w, text=restore.get(_norm(w.text), w.text)) for w in words]
+
+    def original(text: str) -> str:
+        if _norm(text) in restore:
+            return restore[_norm(text)]
+        pieces = re.split(r"([\s-]+)", text)
+        return "".join(restore.get(_norm(p), p) if _norm(p) else p for p in pieces)
+
+    return [replace(w, text=original(w.text)) for w in words]
 
 
 def plan_segments(words: list[Word], audio_duration: float,

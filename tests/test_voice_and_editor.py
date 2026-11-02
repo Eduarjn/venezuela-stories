@@ -120,6 +120,15 @@ class VoiceUnitTest(unittest.TestCase):
         back = restore_spelling(words, {"padiya": "Padilla"})
         self.assertEqual([w.text for w in back], ["almirante", "Padilla"])
         self.assertEqual((back[1].start, back[1].end), (0.4, 0.9))
+        # O edge-tts devolve nomes com hífen (e números com o que vem junto) num item só.
+        block = restore_spelling([Word("Chaumont-devant-Damviyers", 1.0, 2.0), Word("Em Padiya", 2.0, 2.5)],
+                                 {"damviyers": "Damvillers", "padiya": "Padilla"})
+        self.assertEqual([w.text for w in block], ["Chaumont-devant-Damvillers", "Em Padilla"])
+
+    def test_french_names_keep_their_ll(self):
+        spoken, restore = pronunciation_text("Na vila de Chaumont-devant-Damvillers, perto de Deauville.", "pt-BR")
+        self.assertEqual(spoken, "Na vila de Chaumont-devant-Damvillers, perto de Deauville.")
+        self.assertEqual(restore, {})
 
     def test_short_pauses_are_kept(self):
         words = [Word("a", 0.0, 0.4), Word("b", 0.5, 0.9)]
@@ -178,6 +187,9 @@ class EditorUnitTest(unittest.TestCase):
         words = split_spoken_groups([TimedWord("Os", 0.0, 0.2), TimedWord("70 quilômetros por segundo", 0.2, 2.8),
                                      TimedWord("e", 2.8, 2.9), TimedWord("queimam", 2.9, 3.4)])
         self.assertEqual([w.text for w in words], ["Os", "70", "quilômetros", "por", "segundo", "e", "queimam"])
+        name = split_spoken_groups([TimedWord("Chaumont-devant-Damvillers", 1.0, 2.3)])
+        self.assertEqual([w.text for w in name], ["Chaumont-", "devant-", "Damvillers"])  # nome comprido: nos hífens
+        self.assertEqual([w.text for w in split_spoken_groups([TimedWord("Tempel-Tuttle", 0, 1)])], ["Tempel-Tuttle"])
         self.assertEqual(words[1].start, 0.2)
         self.assertEqual(words[4].end, 2.8)
         self.assertTrue(all(a.end <= b.start + 1e-9 and a.start < a.end for a, b in zip(words, words[1:])))
