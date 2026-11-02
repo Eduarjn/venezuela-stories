@@ -249,6 +249,71 @@ class PublishTest(unittest.TestCase):
             publicar.check_networks(["tiktok", "orkut"])
 
 
+class QueueFolderTest(unittest.TestCase):
+    """Fila: rodar todo dia agenda só os vídeos novos da pasta, nos próximos horários livres."""
+
+    def setUp(self):
+        from publicacao import build_ready_posts
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.folder = Path(self.tmp.name)
+        self.videos = {}
+        for sub, day in (("1_catatumbo", "2026-11-01"), ("2_aviao", "2026-10-30"), ("10_ponte", "2026-10-31")):
+            (self.folder / sub).mkdir()
+            video = self.folder / sub / f"{day}_{sub[sub.index('_') + 1:]}.mp4"
+            video.write_bytes(b"mp4")
+            (self.folder / sub / f"{day}_postar.txt").write_text(build_ready_posts({**EPISODE, "date": day}, []),
+                                                                 encoding="utf-8")
+            self.videos[sub] = video
+        self.patch = mock.patch("publicar.video_seconds", return_value=75)
+        self.patch.start()
+        self.start = (datetime.now(BRT) + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def tearDown(self):
+        self.patch.stop()
+        self.tmp.cleanup()
+
+    def client(self, session):
+        return publicar.UploadPostClient("k", "u", session=session, sleep=lambda s: None)
+
+    def scheduled(self, session):
+        return [dict(c["data"])["scheduled_date"] for c in session.calls]
+
+    def test_new_videos_take_the_next_free_slots_in_folder_order(self):
+        # O 2_aviao já foi agendado para o 1º horário: os outros pulam esse horário.
+        first = self.start.replace(hour=12)
+        record = {"date": "2026-10-30", "when": first.isoformat(timespec="minutes"), "sends": [{"job_id": "j0"}],
+                  "results": [{"network": "tiktok", "ok": True, "detail": "agendado", "scheduled_for": None}]}
+        self.videos["2_aviao"].with_name("2026-10-30_aviao.publicacao.json").write_text(json.dumps(record),
+                                                                                      encoding="utf-8")
+        session = FakeSession([FakeResponse(202, {"success": True, "job_id": "a"}),
+                               FakeResponse(202, {"success": True, "job_id": "b"})])
+        outcome = publicar.queue_folder(self.folder, ["12:00", "19:00"], ["tiktok"], self.start,
+                                        client=self.client(session))
+        self.assertEqual([video.parent.name for video, _, _ in outcome], ["1_catatumbo", "10_ponte"])  # ordem natural
+        utc = lambda moment: moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+        self.assertEqual(self.scheduled(session), [utc(self.start.replace(hour=19)),
+                                                   utc((self.start + timedelta(days=1)).replace(hour=12))])
+        self.assertTrue(all(r.ok for _, _, results in outcome for r in results))
+
+        again = FakeSession()  # no dia seguinte, nada novo na pasta: nada é enviado
+        self.assertEqual(publicar.queue_folder(self.folder, ["12:00", "19:00"], ["tiktok"], self.start,
+                                               client=self.client(again)), [])
+        self.assertEqual(again.calls, [])
+
+    def test_dry_run_and_clear_errors(self):
+        session = FakeSession()
+        outcome = publicar.queue_folder(self.folder, ["12:00"], ["tiktok"], self.start, dry_run=True,
+                                        client=self.client(session))
+        self.assertEqual(len(outcome), 3)
+        self.assertEqual(session.calls, [])
+        self.assertFalse(list(self.folder.rglob("*.publicacao.json")))
+        with self.assertRaises(publicar.PublishError):
+            publicar.queue_folder(self.folder, [], ["tiktok"], dry_run=True)
+        with self.assertRaises(publicar.PublishError):
+            publicar.queue_folder(self.folder / "nao-existe", ["12:00"], ["tiktok"], dry_run=True)
+
+
 class DownloadedVideoTest(unittest.TestCase):
     """Vídeo baixado no PC: o .mp4, o AAAA-MM-DD_postar.txt e a capa na mesma pasta, sem o projeto."""
 

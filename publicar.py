@@ -23,6 +23,10 @@ Uso, sempre depois da revisão do vídeo:
         # que já passou fica para o dia seguinte
     python publicar.py --status 2026-11-02            # o que já saiu em cada rede
 
+Fila (para rodar todo dia no agendador do Windows ou numa rotina na nuvem): todo vídeo da
+pasta que ainda não foi agendado ganha o próximo horário livre; o que já foi fica como está.
+    python publicar.py --pasta "C:\\Downloads\\PRONTO_PARA_POSTAR" --horarios 12:00 19:00
+
 Vídeo baixado (gerado em outro computador): o .mp4, o AAAA-MM-DD_postar.txt e, se tiver, o
 AAAA-MM-DD_capa.jpg na mesma pasta.
     python publicar.py --video "C:\\Downloads\\2026-11-02_titulo.mp4" --quando "2026-11-02 19:00"
@@ -129,6 +133,51 @@ def agenda_slots(start: datetime, count: int, every_hours: float = 24, times: li
                 slots.append(moment)
         day += timedelta(days=1)
     return slots
+
+
+def _minute(moment: datetime) -> datetime:
+    return moment.astimezone(timezone.utc).replace(second=0, microsecond=0)
+
+
+def folder_videos(folder: Path) -> list[Path]:
+    """Vídeos prontos da pasta e das subpastas (com o AAAA-MM-DD_postar.txt ao lado), em ordem
+    natural: a PRONTO_PARA_POSTAR já vem numerada na ordem de postagem (1_, 2_, ..., 10_)."""
+    def natural(path: Path) -> list:
+        return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", str(path.relative_to(folder)))]
+    videos = [v for v in folder.rglob("*.mp4")
+              if v.with_name(f"{v.name[:10]}_postar.txt").exists() or v.with_name("postar.txt").exists()]
+    return sorted(videos, key=natural)
+
+
+def queue_folder(folder: Path, times: list[str], networks: list[str] | None = None, start: datetime | None = None,
+                 dry_run: bool = False, client=None, now: datetime | None = None
+                 ) -> list[tuple[Path, datetime, list[PostResult]]]:
+    """Fila: cada vídeo da pasta que ainda não foi para todas as redes ganha o próximo horário
+    livre (um vídeo por horário de times). Rodar todo dia só agenda o que chegou de novo; um
+    horário já ocupado por outro vídeo da pasta não é usado de novo."""
+    folder = Path(folder)
+    if not folder.is_dir():
+        raise PublishError(f"{folder} não é uma pasta")
+    if not times:
+        raise PublishError("a fila precisa de --horarios (ex.: --horarios 12:00 19:00)")
+    networks = networks or networks_from_env()
+    taken: set[datetime] = set()
+    pending: list[Path] = []
+    for video in folder_videos(folder):
+        record = _load_record(_record_path(None, video))
+        sent = {r["network"] for r in record.get("results", []) if r.get("ok") or r.get("pending")}
+        if set(networks) <= sent:
+            if record.get("when") not in (None, "agora"):
+                taken.add(_minute(datetime.fromisoformat(record["when"])))
+            continue
+        pending.append(video)
+    if not pending:
+        return []
+    begin = start or datetime.now().astimezone()
+    slots = [s for s in agenda_slots(begin, len(pending) + len(taken), times=times, now=now)
+             if _minute(s) not in taken][:len(pending)]
+    return [(video, when, publish_file(video, networks, when, dry_run=dry_run, client=client))
+            for video, when in zip(pending, slots)]
 
 
 def networks_from_env() -> list[str]:
@@ -544,6 +593,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--teste", action="store_true", help="mostra o que seria enviado, sem enviar")
     parser.add_argument("--status", nargs="+", metavar="DIA_OU_MP4",
                         help="como ficou cada envio (AAAA-MM-DD ou o .mp4 baixado)")
+    parser.add_argument("--pasta", type=Path,
+                        help="fila: agenda os vídeos novos da pasta nos próximos --horarios livres")
     args = parser.parse_args(argv)
     try:
         if args.status:
@@ -553,6 +604,15 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if ok else 1
         networks = (check_networks([n.strip().lower() for n in args.redes.split(",") if n.strip()])
                     if args.redes else networks_from_env())
+        if args.pasta:
+            start = parse_start(args.inicio) if args.inicio else None
+            outcome = queue_folder(args.pasta, args.horarios, networks, start, dry_run=args.teste)
+            if not outcome:
+                print("[OK] nada novo na pasta: todo vídeo já foi agendado ou publicado")
+            ok = True
+            for video, when, results in outcome:
+                ok &= _print(video.name, results)
+            return 0 if ok else 1
         if args.agenda or args.agenda_videos:
             if not args.inicio:
                 parser.error('a agenda precisa de --inicio "AAAA-MM-DD HH:MM" (com --horarios, basta o dia)')

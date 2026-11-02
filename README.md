@@ -285,6 +285,9 @@ python publicar.py --agenda 2026-11-05 2026-11-06 2026-11-07 2026-11-08 --inicio
                                        # 2 por dia, um em cada horário (o que já passou vai para o dia seguinte)
 python publicar.py --status 2026-11-02                       # o que já saiu em cada rede
 
+# fila: todo vídeo novo da pasta ganha o próximo horário livre; o que já foi agendado fica
+python publicar.py --pasta "C:\Users\eduar\Downloads\PRONTO_PARA_POSTAR" --horarios 12:00 19:00
+
 # vídeo baixado (gerado em outro computador): o .mp4, o AAAA-MM-DD_postar.txt e o
 # AAAA-MM-DD_capa.jpg na mesma pasta (a pasta PRONTO_PARA_POSTAR já vem assim)
 python publicar.py --video "C:\Users\eduar\Downloads\2026-11-02_titulo.mp4" --quando "2026-11-02 19:00"
@@ -307,6 +310,11 @@ python publicar.py --status "C:\Users\eduar\Downloads\2026-11-02_titulo.mp4"
   `<vídeo>.publicacao.json`). Rodar de novo só manda para as redes que falharam; o que já
   foi ou ainda está processando não é reenviado. Com todas as redes ok, o tema é marcado
   como publicado.
+- Rotina diária no Windows: `agendar_postagens.ps1` roda a fila (`--pasta`) e grava em
+  `logs/postagens.log`; o cabeçalho do arquivo tem o comando para registrar a tarefa no
+  Agendador de Tarefas (todo dia às 08:00, ou ao ligar o PC se ele estava desligado). Os vídeos
+  de data marcada (feriado, efeméride) vão antes com `--video --quando`; a fila pula os que já
+  foram agendados.
 - Pelo Claude (sem terminal): o Upload-Post tem conector oficial no diretório do Claude
   (Personalizar > Conectores > Upload-Post). Ele agenda e mostra status e estatísticas, mas
   não lê arquivos do computador; para os vídeos daqui, use o `publicar.py`.
