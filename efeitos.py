@@ -79,9 +79,13 @@ def _plain(text: str) -> str:
     return "".join(c for c in text if not unicodedata.combining(c))
 
 
+# Nomes próprios que enganam as regras: "Rio" (a cidade) não é rio; "Rio Grande" também não.
+PROPER_NAMES = re.compile(r"\bRio( de Janeiro| Grande( do Sul| do Norte)?)?\b")
+
+
 def content_sfx(narration: str) -> list[str]:
     """Efeitos que a fala pede, pelas palavras dela, do mais forte para o mais fraco."""
-    text = _plain(narration)
+    text = _plain(PROPER_NAMES.sub("cidade", narration))
     return [cue for cue, pattern in SFX_RULES if re.search(pattern, text)]
 
 

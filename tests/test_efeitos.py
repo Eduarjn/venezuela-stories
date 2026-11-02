@@ -36,6 +36,10 @@ class DirectorTest(unittest.TestCase):
         self.assertEqual(content_sfx("Uma única noite de raios pode durar nove horas.")[0], "thunder")
         self.assertEqual(content_sfx("Neste lago, o céu explode quase 300 noites por ano.")[0], "thunder")
         self.assertNotIn("thunder", content_sfx("Por semanas, nenhum raio."))  # negação: sem trovão
+        # "Rio" com maiúscula é a cidade: nada de som de correnteza.
+        self.assertNotIn("river", content_sfx("Dom Pedro estava em Petrópolis e desceu para o Rio."))
+        self.assertNotIn("river", content_sfx("Na Câmara Municipal do Rio de Janeiro, à noite."))
+        self.assertEqual(content_sfx("Onde o rio Catatumbo deságua no lago")[0], "river")
 
     def test_no_thunder_or_lightning_flash_without_a_storm(self):
         effects = direct(PONTE)
