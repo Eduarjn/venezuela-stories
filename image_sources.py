@@ -27,6 +27,7 @@ SEARCH_LIMIT = 20  # muitos resultados do Commons são PDF, SVG ou vídeo e são
 DOWNLOAD_WIDTH = 1280  # tamanho padrão de miniatura do Wikimedia (tamanhos fora do padrão são limitados)
 # Próximo tamanho padrão abaixo de 1280 (https://www.mediawiki.org/wiki/Common_thumbnail_sizes).
 SMALLER_STANDARD_WIDTH = 960
+HTML_SEARCH_LIMIT = 8  # busca pela página do Commons: lê a página de até 8 arquivos JPEG
 
 
 @dataclass
@@ -69,7 +70,7 @@ MAX_TRIES = 4
 MAX_WAIT_SECONDS = 30.0
 
 
-def _request(url: str, *, sleep: Callable[[float], None] | None = None, **kwargs):
+def _request(url: str, *, sleep: Callable[[float], None] | None = None, tries: int = MAX_TRIES, **kwargs):
     """GET que espera e tenta de novo quando o servidor pede calma (429/503).
 
     O Wikimedia responde 429 quando várias buscas chegam em sequência (comum em IP
@@ -81,9 +82,9 @@ def _request(url: str, *, sleep: Callable[[float], None] | None = None, **kwargs
     import requests
 
     sleep = sleep or time.sleep
-    for attempt in range(1, MAX_TRIES + 1):
+    for attempt in range(1, tries + 1):
         response = requests.get(url, **kwargs)
-        if response.status_code not in RETRY_STATUS or attempt == MAX_TRIES:
+        if response.status_code not in RETRY_STATUS or attempt == tries:
             response.raise_for_status()
             return response
         try:
@@ -96,9 +97,24 @@ def _request(url: str, *, sleep: Callable[[float], None] | None = None, **kwargs
     raise AssertionError("inalcançável")
 
 
-def _get_json(url: str, params: dict, headers: dict) -> dict:
-    response = _request(url, params=params, headers={"User-Agent": USER_AGENT, **headers}, timeout=20)
+def _get_json(url: str, params: dict, headers: dict, tries: int = MAX_TRIES) -> dict:
+    response = _request(url, params=params, headers={"User-Agent": USER_AGENT, **headers}, timeout=20, tries=tries)
     return response.json()
+
+
+def _get_json_quick(url: str, params: dict, headers: dict) -> dict:
+    """Busca na API do Commons com 1 nova tentativa só: se continuar limitada (429), a busca
+    vai para a página do Commons, que responde mesmo quando a API não responde."""
+    return _get_json(url, params, headers, tries=2)
+
+
+def _get_html(url: str, params: dict) -> str:
+    return _request(url, params=params, headers={"User-Agent": USER_AGENT}, timeout=30).text
+
+
+def _rate_limited(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None) in RETRY_STATUS
 
 
 UPLOAD_HOST = "upload.wikimedia.org"
@@ -183,20 +199,30 @@ def _download_url(info: dict) -> str:
 class WikimediaSource:
     name = "wikimedia"
     API = "https://commons.wikimedia.org/w/api.php"
+    MEDIA_SEARCH = "https://commons.wikimedia.org/w/index.php"
+    FILE_PAGE = "https://commons.wikimedia.org/wiki/"
     PHOTO_MIMES = ("image/jpeg",)  # fotos e digitalizações; evita mapas/diagramas em SVG/PNG
 
     def __init__(self, allow_share_alike: bool = False,
-                 get_json: Callable[[str, dict, dict], dict] = _get_json) -> None:
+                 get_json: Callable[[str, dict, dict], dict] = _get_json_quick,
+                 get_html: Callable[[str, dict], str] = _get_html) -> None:
         self.allow_share_alike = allow_share_alike
         self.get_json = get_json
+        self.get_html = get_html
 
     def search(self, query: str) -> list[Candidate]:
-        data = self.get_json(self.API, {
-            "action": "query", "format": "json", "formatversion": "2",
-            "generator": "search", "gsrsearch": query, "gsrnamespace": "6",
-            "gsrlimit": str(SEARCH_LIMIT), "prop": "imageinfo",
-            "iiprop": "url|size|mime|extmetadata", "iiurlwidth": str(DOWNLOAD_WIDTH),
-        }, {})
+        try:
+            data = self.get_json(self.API, {
+                "action": "query", "format": "json", "formatversion": "2",
+                "generator": "search", "gsrsearch": query, "gsrnamespace": "6",
+                "gsrlimit": str(SEARCH_LIMIT), "prop": "imageinfo",
+                "iiprop": "url|size|mime|extmetadata", "iiurlwidth": str(DOWNLOAD_WIDTH),
+            }, {})
+        except Exception as exc:  # noqa: BLE001 - API limitada: a página de busca responde
+            if not _rate_limited(exc):
+                raise
+            log.info("API do Commons limitada (429); buscando '%s' pela página de busca", query)
+            return self.search_html(query)
         pages = sorted((data.get("query") or {}).get("pages") or [], key=lambda p: p.get("index", 0))
         results = []
         for page in pages:
@@ -215,13 +241,86 @@ class WikimediaSource:
                 page_url=info.get("descriptionurl") or "",
                 title=title,
                 author=_strip_html(value("Artist")) or _strip_html(value("Credit")),
-                license=value("LicenseShortName") or ("Public domain" if license_kind == "pd" else license_kind.upper()),
+                license=value("LicenseShortName") or ("Public domain" if kind == "pd" else kind.upper()),
                 license_url=value("LicenseUrl"),
                 width=int(info.get("width") or 0),
                 height=int(info.get("height") or 0),
                 attribution_required=kind != "pd",
             ))
         return results
+
+    def search_html(self, query: str, limit: int = HTML_SEARCH_LIMIT) -> list[Candidate]:
+        """A mesma busca pela página do Commons (Special:MediaSearch) e a página de cada
+        arquivo: licença, autor e tamanho saem dos campos que o Commons põe em toda página.
+        Mesmas regras da API: só JPEG, só licença livre, CC BY-SA só com permissão."""
+        page = self.get_html(self.MEDIA_SEARCH, {"title": "Special:MediaSearch", "type": "image", "search": query})
+        titles = list(dict.fromkeys(unquote(t).replace("_", " ")
+                                    for t in re.findall(r'/wiki/(File:[^"?#<>]+)', page)))
+        results = []
+        for title in [t for t in titles if re.search(r"\.jpe?g$", t, re.I)][:limit]:
+            try:
+                candidate = candidate_from_file_page(title, self.get_html(self.FILE_PAGE + title.replace(" ", "_"), {}),
+                                                     self.allow_share_alike)
+            except Exception as exc:  # noqa: BLE001 - uma página fora do ar não para a busca
+                log.warning("página de %s falhou: %s", title, exc)
+                continue
+            if candidate is not None:
+                results.append(candidate)
+        return results
+
+
+def _field(page: str, name: str) -> list[str]:
+    """Valores dos campos licensetpl_* da página de um arquivo do Commons."""
+    pattern = r'class="licensetpl(?:&#95;|_)' + name.replace("_", r"(?:&#95;|_)") + r'"[^>]*>([^<]*)'
+    return [html.unescape(v).strip() for v in re.findall(pattern, page)]
+
+
+def _file_page_author(page: str) -> str:
+    """Autor da página de um arquivo: o nome do criador (obras de arte) ou o campo Author."""
+    cell = re.search(r'id="fileinfotpl(?:&#95;|_)aut"[^>]*>.*?</td>\s*<td[^>]*>(.*?)</td>', page, re.S)
+    if not cell:
+        return ""
+    value = re.sub(r"<style[^>]*>.*?</style>", " ", cell.group(1), flags=re.S)
+    creator = re.search(r'id="creator"[^>]*>(.*?)</span>\s*</a>|id="creator"[^>]*>(.*?)</span>', value, re.S)
+    text = _strip_html(next((g for g in creator.groups() if g), "")) if creator else ""
+    return (text or _strip_html(value))[:120]
+
+
+def candidate_from_file_page(title: str, page: str, allow_share_alike: bool = False) -> Candidate | None:
+    """Candidate a partir da página HTML de um arquivo do Commons (None: licença ou arquivo
+    que não serve)."""
+    shorts = list(dict.fromkeys(s for s in _field(page, "short") if s))
+    kinds = {("pd" if s.lower() == "no restrictions" else classify_license(s, s)) for s in shorts}
+    kind = next((k for k in ("pd", "by", "by-sa") if k in kinds), None)
+    if kind is None or (kind == "by-sa" and not allow_share_alike):
+        return None
+    original = re.search(r'href="(https://upload\.wikimedia\.org/wikipedia/commons/[0-9a-f]/[0-9a-f]{2}/[^"?]+)', page)
+    size = re.search(r"\(([\d,.]+) × ([\d,.]+) pixels, file size", page)
+    if not original or not size:
+        return None
+    width, height = (int(re.sub(r"\D", "", size.group(i))) for i in (1, 2))
+    license = next((s for s in shorts if classify_license(s, s) == kind or (kind == "pd" and s.lower() == "no restrictions")),
+                   shorts[0])
+    links = _field(page, "link")
+    marker = {"by": "/licenses/by/", "by-sa": "/licenses/by-sa/"}.get(kind, "")
+    license_url = next((u for u in links if marker and marker in u), "")
+    path = original.group(1).split("/wikipedia/commons/", 1)[1]  # ex.: a/a4/Nome.jpg
+    # Como a API: miniatura padrão de 1280 px quando a foto é maior que isso; senão o original.
+    thumb = (f"https://upload.wikimedia.org/wikipedia/commons/thumb/{path}/{DOWNLOAD_WIDTH}px-{path.rsplit('/', 1)[-1]}"
+             if width > DOWNLOAD_WIDTH else original.group(1))
+    name = re.sub(r"^File:|\.[a-zA-Z0-9]+$", "", title).strip()
+    return Candidate(
+        source="wikimedia",
+        download_url=_download_url({"url": original.group(1), "thumburl": thumb, "width": width, "height": height}),
+        page_url=f"https://commons.wikimedia.org/wiki/{title.replace(' ', '_')}",
+        title=name,
+        author=_file_page_author(page),
+        license=license,
+        license_url=license_url,
+        width=width,
+        height=height,
+        attribution_required=kind != "pd",
+    )
 
 
 class PexelsSource:

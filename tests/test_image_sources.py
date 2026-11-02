@@ -110,6 +110,81 @@ class WikimediaTest(unittest.TestCase):
         self.assertEqual(len(self.source(response, allow_share_alike=True).search("x")), 1)
 
 
+def file_page(short, attr_req, width, height, name, author_cell="<td>Navicore</td>", link=""):
+    """Trecho de página de arquivo do Commons com os campos que a busca pela página lê."""
+    return (f'<td id="fileinfotpl&#95;aut" class="fileinfo-paramfield">Author</td>\n{author_cell}'
+            f'<span class="licensetpl&#95;short" style="display:none;">{short}</span>'
+            f'<span class="licensetpl&#95;link" style="display:none;">{link}</span>'
+            f'<span class="licensetpl&#95;attr&#95;req" style="display:none;">{attr_req}</span>'
+            f'<a href="https://upload.wikimedia.org/wikipedia/commons/8/81/{name}?utm_source=x" class="internal">'
+            f'Original file</a> ({width:,} × {height:,} pixels, file size: 2 MB)')
+
+
+class RateLimited(Exception):
+    def __init__(self):
+        super().__init__("429 Client Error: Too Many Requests")
+        self.response = type("R", (), {"status_code": 429})()
+
+
+class WikimediaPageFallbackTest(unittest.TestCase):
+    """API do Commons limitada (429, comum no IP da nuvem): a busca segue pela página do Commons."""
+
+    PAGES = {
+        "File:Leonid_Meteor_(cropped).jpg": file_page("CC BY 3.0 ", "true", 2700, 1519, "Leonid_Meteor_%28cropped%29.jpg",
+                                                     link="https://creativecommons.org/licenses/by/3.0"),
+        "File:Election_Day_1815.jpg": file_page(
+            "Public domain", "false", 1516, 984, "Election_Day_1815.jpg",
+            author_cell='<td><style>.x{color:red}</style><span class="fn" id="creator"><bdi>'
+                        '<a href="#"><span title="painter">John Lewis Krimmel</span></a></bdi></span></td>'),
+        "File:Boche_crew.jpg": file_page("No restrictions", "false", 2500, 1900, "Boche_crew.jpg"),
+        "File:Village.jpg": file_page("CC BY-SA 4.0", "true", 4000, 3000, "Village.jpg"),
+    }
+
+    def source(self, allow_share_alike=False):
+        self.fetched = []
+
+        def get_json(url, params, headers):
+            raise RateLimited()
+
+        def get_html(url, params):
+            self.fetched.append(url.rsplit("/", 1)[-1])
+            if params.get("title") == "Special:MediaSearch":
+                return "".join(f'<a href="https://commons.wikimedia.org/wiki/{name}">x</a>'
+                               for name in ["File:Leonid_Meteor_(cropped).jpg", "File:Map.png",
+                                            "File:Election_Day_1815.jpg", "File:Boche_crew.jpg", "File:Village.jpg"])
+            return self.PAGES[url.split("/wiki/", 1)[1]]
+        return WikimediaSource(allow_share_alike, get_json=get_json, get_html=get_html)
+
+    def test_rate_limited_api_falls_back_to_the_commons_pages_with_the_same_rules(self):
+        found = self.source().search("Leonid meteor")
+        self.assertEqual([c.title for c in found], ["Leonid Meteor (cropped)", "Election Day 1815", "Boche crew"])
+        self.assertNotIn("Map.png", self.fetched)  # só JPEG, como na API
+        meteor, painting, crew = found
+        self.assertEqual((meteor.license, meteor.author, meteor.width, meteor.height), ("CC BY 3.0", "Navicore", 2700, 1519))
+        self.assertTrue(meteor.attribution_required)
+        self.assertEqual(meteor.license_link(), "https://creativecommons.org/licenses/by/3.0")
+        self.assertEqual(meteor.download_url, "https://upload.wikimedia.org/wikipedia/commons/thumb/8/81/"
+                                              "Leonid_Meteor_%28cropped%29.jpg/1280px-Leonid_Meteor_%28cropped%29.jpg")
+        self.assertEqual(painting.author, "John Lewis Krimmel")  # o nome do criador, sem o CSS do quadro
+        self.assertFalse(painting.attribution_required)
+        self.assertEqual((crew.license, crew.attribution_required), ("No restrictions", False))
+
+    def test_share_alike_page_only_when_allowed(self):
+        self.assertNotIn("Village", [c.title for c in self.source().search("x")])
+        self.assertIn("Village", [c.title for c in self.source(allow_share_alike=True).search("x")])
+
+    def test_other_api_errors_are_not_hidden(self):
+        def get_json(url, params, headers):
+            raise ValueError("resposta quebrada")
+        with self.assertRaises(ValueError):
+            WikimediaSource(get_json=get_json, get_html=lambda url, params: "").search("x")
+
+    def test_api_page_without_short_license_name_still_works(self):
+        page = commons_page(1, "Sem_nome", "pd", "")
+        found = WikimediaSource(get_json=lambda url, params, headers: commons_response(page)).search("x")
+        self.assertEqual(found[0].license, "Public domain")
+
+
 class CommonsThumbFallbackTest(unittest.TestCase):
     def test_upload_urls_map_to_commons_thumb_php(self):
         from image_sources import commons_thumb_php
