@@ -168,6 +168,7 @@ class Episode(BaseModel):
     post_title: str
     post_description: str
     hashtags: list[str] = Field(min_length=3, max_length=8)
+    image_region: str | None = None  # país das buscas genéricas de imagem; None = IMAGE_REGION
 
     @model_validator(mode="after")
     def _retention_rules(self) -> "Episode":
@@ -227,9 +228,22 @@ class Episode(BaseModel):
 
 # --------------------------------------------------------------------------- prompts
 
-SYSTEM_PROMPT = f"""Você é roteirista e estrategista de retenção de um canal de vídeos curtos
-verticais (TikTok, Reels, Shorts) sobre a Venezuela: história real, mistérios históricos,
-curiosidades econômicas, culturais, geográficas e construções marcantes.
+# Assunto do canal. CHANNEL_SCOPE no .env troca (ex.: "de curiosidades do mundo: histórias
+# reais por trás de datas e acontecimentos em alta").
+CHANNEL_SCOPE_DEFAULT = ("sobre a Venezuela: história real, mistérios históricos, curiosidades econômicas, "
+                         "culturais, geográficas e construções marcantes")
+
+
+def channel_scope() -> str:
+    return (os.getenv("CHANNEL_SCOPE") or "").strip() or CHANNEL_SCOPE_DEFAULT
+
+
+def system_prompt() -> str:
+    return _SYSTEM_PROMPT.replace("{scope}", channel_scope())
+
+
+_SYSTEM_PROMPT = f"""Você é roteirista e estrategista de retenção de um canal de vídeos curtos
+verticais (TikTok, Reels, Shorts) {{scope}}.
 
 REGRAS DE CONTEÚDO
 - Trilha "fact": tudo o que for narrado é real e verificável. Use a ferramenta web_search
@@ -268,7 +282,7 @@ IMAGENS
   sem lugar citado, prefira ainda o lugar ou o objeto real da história, com outro ângulo
   ("Lake Maracaibo dusk", "Rafael Urdaneta Bridge pillar"). Busca genérica só quando a cena não
   tem nada da história para mostrar, e então toda em minúsculas ("lightning storm at night"):
-  no acervo ela vira "<busca> Venezuela". Nada abstrato ("tensão", "mistério"). Cenas vizinhas
+  no acervo ela vira "<busca> <image_region>". Nada abstrato ("tensão", "mistério"). Cenas vizinhas
   podem repetir o mesmo assunto com outra busca.
 - Varie o tipo de imagem ao longo do vídeo (foto, pintura, gravura, mapa, satélite): no máximo
   2 mapas ou imagens de satélite ("from space", "map") por vídeo, nunca em cenas seguidas.
@@ -287,7 +301,11 @@ thunder (só raio/tempestade), rain, impact (batida, queda), explosion, ship_hor
 helicopter, traffic, river, waves, crowd, writing, camera, clock (salto no tempo), riser
 (pergunta, suspense), power_down (algo apaga), boom (só no gancho). Nunca o mesmo em cenas seguidas.
 
+- image_region: o país onde a história acontece, em inglês ("Venezuela", "Mexico", "Brazil");
+  vazio ("") se ela não é de um país só. Amarra as buscas genéricas de imagem a esse país.
+
 SAÍDA: responda SOMENTE com um objeto JSON válido (sem markdown, sem texto antes ou depois)."""
+SYSTEM_PROMPT = system_prompt()  # com o assunto padrão (a Venezuela)
 
 JSON_TEMPLATE = {
     "topic_title": "título curto do tema",
@@ -309,7 +327,8 @@ JSON_TEMPLATE = {
     ],
     "post_title": "título da publicação",
     "post_description": "descrição curta (na trilha fiction, a 1ª linha diz que é lenda)",
-    "hashtags": ["#venezuela", "..."],
+    "hashtags": ["#tema", "..."],
+    "image_region": "Venezuela",
 }
 
 LANGUAGE_NOTES = {
@@ -602,7 +621,7 @@ class ClaudeCodeBackend:
         prompt = messages[-1]["content"]
         tmp = self._workdir.name
         system_file = Path(tmp) / "system.txt"
-        system_file.write_text(SYSTEM_PROMPT + CLAUDE_CODE_NOTE, encoding="utf-8")
+        system_file.write_text(system_prompt() + CLAUDE_CODE_NOTE, encoding="utf-8")
         cmd = [self.bin, "-p", "Siga as instruções recebidas pela entrada padrão.",
                "--output-format", "stream-json", "--verbose",
                "--append-system-prompt-file", str(system_file),
@@ -701,7 +720,7 @@ class StoryEngine:
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=MAX_TOKENS,
-                system=SYSTEM_PROMPT,
+                system=system_prompt(),
                 messages=messages,
                 tools=[{"type": "web_search_20250305", "name": "web_search",
                         "max_uses": WEB_SEARCH_MAX_USES}],

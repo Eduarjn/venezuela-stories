@@ -110,6 +110,18 @@ class WikimediaTest(unittest.TestCase):
         self.assertEqual(len(self.source(response, allow_share_alike=True).search("x")), 1)
 
 
+class CommonsThumbFallbackTest(unittest.TestCase):
+    def test_upload_urls_map_to_commons_thumb_php(self):
+        from image_sources import commons_thumb_php
+
+        thumb = "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bd/Catrina.jpg/960px-Catrina.jpg"
+        self.assertEqual(commons_thumb_php(thumb), "https://commons.wikimedia.org/w/thumb.php?f=Catrina.jpg&w=960")
+        original = "https://upload.wikimedia.org/wikipedia/commons/a/a1/Altar.JPG?utm_source=x"
+        self.assertEqual(commons_thumb_php(original), "https://commons.wikimedia.org/w/thumb.php?f=Altar.JPG&w=960")
+        self.assertIsNone(commons_thumb_php("https://upload.wikimedia.org/wikipedia/commons/b/bd/Storm.ogg"))
+        self.assertIsNone(commons_thumb_php("https://images.pexels.com/photos/1/x.jpg"))
+
+
 class WikimediaVideoTest(unittest.TestCase):
     TITLE = 'File:Catatumbo "raios" (CIRA).webm'
 

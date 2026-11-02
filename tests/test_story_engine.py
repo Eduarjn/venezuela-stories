@@ -340,3 +340,19 @@ class VerifySourcesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChannelScopeTest(unittest.TestCase):
+    def test_channel_subject_comes_from_the_env(self):
+        import os
+        from unittest import mock
+
+        import story_engine
+
+        with mock.patch.dict(os.environ, {"CHANNEL_SCOPE": "de curiosidades do mundo"}):
+            prompt = story_engine.system_prompt()
+        self.assertIn("vídeos curtos\nverticais (TikTok, Reels, Shorts) de curiosidades do mundo.", prompt)
+        self.assertNotIn("{scope}", prompt)
+        with mock.patch.dict(os.environ, {"CHANNEL_SCOPE": ""}):
+            self.assertIn("sobre a Venezuela", story_engine.system_prompt())
+        self.assertIn("image_region", prompt)

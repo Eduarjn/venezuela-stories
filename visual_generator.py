@@ -591,7 +591,13 @@ class VisualGenerator:
         if refresh:
             clear_episode_visuals(visuals_dir)
         if self.stock is not None:
-            self._ensure_stock_images(episode, visuals_dir)
+            region = self.stock.region
+            if episode.get("image_region") is not None:  # o país da história vence o IMAGE_REGION
+                self.stock.region = str(episode["image_region"]).strip()
+            try:
+                self._ensure_stock_images(episode, visuals_dir)
+            finally:
+                self.stock.region = region
 
         results: list[SceneVisual] = []
         for scene in episode["scenes"]:

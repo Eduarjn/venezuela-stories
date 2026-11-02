@@ -101,7 +101,39 @@ def _get_json(url: str, params: dict, headers: dict) -> dict:
     return response.json()
 
 
+UPLOAD_HOST = "upload.wikimedia.org"
+
+
+def commons_thumb_php(url: str, width: int = SMALLER_STANDARD_WIDTH) -> str | None:
+    """Mesma imagem pelo thumb.php do Commons (commons.wikimedia.org), para quando o
+    upload.wikimedia.org devolve 429 a um IP compartilhado (nuvem). Só para imagens."""
+    if UPLOAD_HOST not in url:
+        return None
+    path = url.split("?", 1)[0].split("/wikipedia/commons/", 1)[-1]
+    match = re.match(r"thumb/[0-9a-f]/[0-9a-f]{2}/([^/]+)/(\d+)px-", path)
+    if match:
+        name, width = match.group(1), int(match.group(2))
+    else:
+        match = re.match(r"[0-9a-f]/[0-9a-f]{2}/([^/]+)$", path)
+        if not match:
+            return None
+        name = match.group(1)
+    if not re.search(r"\.(jpe?g|png|gif|tiff?|webp)$", name, re.I):
+        return None
+    return f"https://commons.wikimedia.org/w/thumb.php?f={name}&w={width}"
+
+
 def download(url: str) -> bytes:
+    if UPLOAD_HOST in url:  # 1 tentativa; com 429 vai direto para o thumb.php do Commons
+        import requests
+
+        response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=60)
+        if response.status_code == 200:
+            return response.content
+        fallback = commons_thumb_php(url) if response.status_code == 429 else None
+        if fallback:
+            log.info("%s pediu calma (429); baixando pelo thumb.php do Commons", UPLOAD_HOST)
+            url = fallback
     response = _request(url, headers={"User-Agent": USER_AGENT}, timeout=60)
     return response.content
 
