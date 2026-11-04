@@ -114,6 +114,9 @@ class VoiceUnitTest(unittest.TestCase):
         self.assertEqual(spoken, "Conta-se que o almirante Padiya viu Los Yanos. Rómulo Betancur e Hollywood.")
         self.assertEqual(restore, {"padiya": "Padilla", "yanos": "Llanos", "betancur": "Betancourt"})
         self.assertEqual(pronunciation_text("El almirante Padilla", "es-419"), ("El almirante Padilla", {}))
+        spoken, restore = pronunciation_text("Foi George McGill, há 94 anos.", "pt-BR")
+        self.assertEqual(spoken, "Foi George Mecguíl, há 94 anos.")
+        self.assertEqual(restore, {"mecguil": "McGill"})
 
     def test_subtitle_words_get_the_original_spelling_back(self):
         words = [Word("almirante", 0.0, 0.4), Word("Padiya", 0.4, 0.9)]

@@ -271,6 +271,7 @@ def probe_duration(path: Path) -> float:
 # com a grafia original (as palavras devolvidas pelo TTS são trocadas de volta).
 PRONUNCIATION_PT = {
     "Betancourt": "Betancur",
+    "McGill": "Mecguíl",  # sem isso o "Mc" sai soletrado ("M. C. Gill")
 }
 # Nomes com "ll" que não são espanhóis (a regra "ll" -> "y" não vale para eles).
 LL_EXCEPTIONS = {"hollywood", "bill", "wall", "mallory", "kellogg", "lloyd", "william", "williams"}
