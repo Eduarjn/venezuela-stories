@@ -27,6 +27,12 @@ SOURCE_NAMES = {"wikimedia": "do Wikimedia Commons", "pexels": "da Pexels"}
 COVER_SIZE = (1080, 1920)
 COVER_TEXT_WIDTH = 940
 YELLOW = (255, 215, 0)      # o mesmo amarelo das legendas
+# Cores da capa por estilo (o mesmo "estilo" do episódio que pinta as legendas).
+COVER_STYLES = {
+    "padrao": {"last_line": YELLOW, "banner": None},
+    "eua": {"last_line": (224, 22, 43),
+            "banner": {"fill": (10, 31, 68), "stripes": ((255, 255, 255), (224, 22, 43))}},
+}
 FONT_CANDIDATES = (
     "C:/Windows/Fonts/ariblk.ttf",                         # Arial Black (Windows)
     "/System/Library/Fonts/Supplemental/Arial Black.ttf",  # macOS
@@ -189,7 +195,26 @@ def _wrap(draw, words: list[str], font) -> list[str]:
     return lines
 
 
-def make_cover(image: Path, title: str, output: Path, font_file: str | None = None) -> Path:
+def _draw_banner(draw, banner: dict, text: str, font_file: str | None) -> None:
+    """A mesma faixa do topo do vídeo (video_editor.banner_events), na mesma altura."""
+    from PIL import ImageFont
+
+    from video_editor import BANNER_FONT_SIZE, BANNER_HEIGHT, BANNER_STRIPES, BANNER_TOP
+
+    width = COVER_SIZE[0]
+    draw.rectangle((0, BANNER_TOP, width, BANNER_TOP + BANNER_HEIGHT - 1), fill=banner["fill"])
+    top = BANNER_TOP + BANNER_HEIGHT
+    for color, height in zip(banner["stripes"], BANNER_STRIPES):
+        draw.rectangle((0, top, width, top + height - 1), fill=color)
+        top += height
+    label = cover_text(text).upper()
+    font = (ImageFont.truetype(font_file, BANNER_FONT_SIZE) if font_file
+            else ImageFont.load_default(BANNER_FONT_SIZE))
+    draw.text((width / 2, BANNER_TOP + BANNER_HEIGHT / 2), label, font=font, fill="white", anchor="mm")
+
+
+def make_cover(image: Path, title: str, output: Path, font_file: str | None = None,
+               estilo: str | None = None, faixa: str | None = None) -> Path:
     """Capa 1080x1920: a imagem da cena com o título em letras grandes no centro (área que
     aparece também no recorte 3:4 da grade do perfil); a última linha em amarelo."""
     from PIL import Image, ImageDraw, ImageFont
@@ -202,6 +227,8 @@ def make_cover(image: Path, title: str, output: Path, font_file: str | None = No
         shade.paste(int(125 * max(0.0, 1 - distance ** 2)), (0, y, width, y + 1))
     base = Image.composite(Image.new("RGB", COVER_SIZE, (0, 0, 0)), base, shade)
 
+    style = COVER_STYLES.get(estilo or "padrao", COVER_STYLES["padrao"])
+    last = style["last_line"]
     words = cover_text(title).upper().split()
     draw = ImageDraw.Draw(base)
     for size in range(130, 50, -6):
@@ -213,9 +240,11 @@ def make_cover(image: Path, title: str, output: Path, font_file: str | None = No
     y = int(height * 0.47 - line_height * len(lines) / 2)
     for i, line in enumerate(lines):
         x = (width - draw.textlength(line, font=font)) / 2
-        draw.text((x, y), line, font=font, fill=YELLOW if i == len(lines) - 1 and len(lines) > 1 else "white",
+        draw.text((x, y), line, font=font, fill=last if i == len(lines) - 1 and len(lines) > 1 else "white",
                   stroke_width=max(4, size // 14), stroke_fill="black")
         y += line_height
+    if style["banner"] and (faixa or "").strip():
+        _draw_banner(draw, style["banner"], faixa, font_file)
     output.parent.mkdir(parents=True, exist_ok=True)
     base.save(output, "JPEG", quality=92)
     return output

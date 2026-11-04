@@ -473,7 +473,8 @@ def write_post_copy(day: date, episode: dict) -> Path:
     if image.exists():
         try:
             make_cover(image, episode.get("post_title", ""), day_dir(day) / "capa.jpg",
-                       find_font(episodes_dir().parent / "fonts"))
+                       find_font(episodes_dir().parent / "fonts"), episode.get("estilo"),
+                       episode.get("faixa"))
         except Exception as exc:  # a capa ajuda, mas não pode derrubar o passo
             log.warning("Capa não gerada: %s", exc)
     return post_copy

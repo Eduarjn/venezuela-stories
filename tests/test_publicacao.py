@@ -97,5 +97,19 @@ class CoverTest(unittest.TestCase):
                     self.assertLessEqual(abs(got - want), 4)
 
 
+    def test_cover_style_eua_has_navy_banner_on_top(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "scene_01.png"
+            Image.new("RGB", (1080, 1920), (200, 200, 200)).save(image)
+            out = make_cover(image, "Trump perdeu o Congresso", Path(tmp) / "capa.jpg", find_font(),
+                             "eua", "Eleições EUA 2026")
+            with Image.open(out) as cover:
+                for got, want in zip(cover.getpixel((40, 250)), (10, 31, 68)):  # faixa marinho
+                    self.assertLessEqual(abs(got - want), 6)
+                for got, want in zip(cover.getpixel((40, 350)), (224, 22, 43)):  # listra vermelha
+                    self.assertLessEqual(abs(got - want), 8)
+                for got, want in zip(cover.getpixel((40, 20)), (200, 200, 200)):  # topo intacto
+                    self.assertLessEqual(abs(got - want), 4)
+
 if __name__ == "__main__":
     unittest.main()

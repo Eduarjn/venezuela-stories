@@ -211,6 +211,12 @@ O que o editor faz:
 - **Legendas:** 2–4 palavras por vez (nunca cruzam o fim de frase), até 2 linhas, caixa alta,
   borda preta grossa, centralizadas a 61% da altura; palavra falada em amarelo, em vermelho se
   tiver número; cada grupo entra com um "pop" de 90 ms.
+- **Estilo do episódio:** `"estilo": "eua"` no `current_episode.json` troca as cores (palavra
+  falada alternando vermelho e azul a cada grupo, contorno azul-marinho) e, com `"faixa":
+  "Eleições EUA 2026"`, põe uma faixa marinho com listras branca e vermelha no topo do vídeo
+  inteiro e da `capa.jpg`. Sem `estilo`, tudo fica como antes. Mudou o estilo depois do vídeo
+  pronto: `python -c "from datetime import date; import main; main._reset_steps(date(AAAA, M, D), ('edit',))"`
+  e `python main.py --date AAAA-MM-DD` (só re-renderiza).
 - **Memória:** só FFmpeg em fluxo (sem MoviePy). Cada cena é renderizada sozinha e as cenas são
   concatenadas sem recodificar; uma passada final aplica legendas + mix. Num teste com 14 cenas
   (37 s) o pico foi ~520 MB. Para limitar CPU/RAM, use `FFMPEG_THREADS=2`.

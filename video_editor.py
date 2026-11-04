@@ -83,6 +83,24 @@ SUB_NAME_LINKS = frozenset("de do da dos das del".split())  # "Lago de Maracaibo
 YELLOW = "&H0000D7FF&"    # ASS usa BGR: #FFD700
 RED = "&H00303BFF&"       # #FF3B30
 WHITE = "&H00FFFFFF&"
+BLACK = "&H00000000&"
+US_RED = "&H002B16E0&"    # #E0162B
+US_BLUE = "&H00F6823B&"   # #3B82F6: azul claro, o marinho some sobre imagem escura
+US_NAVY = "&H00441F0A&"   # #0A1F44
+
+# Estilo visual do episódio ("estilo" no current_episode.json; sem ele, "padrao").
+# highlight: cor da palavra falada, alternando a cada grupo; number: cor fixa de palavra com
+# número (None = segue o grupo); outline: contorno das letras; banner: faixa fixa no topo
+# com o texto de "faixa" no episódio.
+STYLES = {
+    "padrao": {"highlight": (YELLOW,), "number": RED, "outline": BLACK, "banner": None},
+    "eua": {"highlight": (US_RED, US_BLUE), "number": None, "outline": US_NAVY,
+            "banner": {"fill": US_NAVY, "stripes": (WHITE, US_RED), "text": WHITE}},
+}
+BANNER_TOP = 236          # abaixo das abas do TikTok e do título do Reels
+BANNER_HEIGHT = 100
+BANNER_STRIPES = (8, 14)  # altura das listras sob a faixa (branca, vermelha)
+BANNER_FONT_SIZE = 62
 
 # Nomes de arquivo (sem extensão) que valem para cada efeito em assets/sfx/: os seus
 # primeiro (ex.: "thunder.mp3"), depois as gravações baixadas ({efeito}_lib_*.wav) e, só
@@ -409,7 +427,37 @@ def chunk_words(words: list[TimedWord]) -> list[list[TimedWord]]:
     return [chunk for sentence in _sentences(words) for chunk in _balanced(sentence)]
 
 
-def build_ass(words: list[TimedWord], video_end: float, font: str) -> str:
+def style_for(estilo: str | None) -> dict:
+    if estilo and estilo not in STYLES:
+        log.warning("Estilo %r desconhecido; usando o padrão", estilo)
+    return STYLES.get(estilo or "padrao", STYLES["padrao"])
+
+
+def _rect(top: int, height: int) -> str:
+    bottom = top + height
+    return f"m 0 {top} l {WIDTH} {top} l {WIDTH} {bottom} l 0 {bottom}"
+
+
+def banner_events(banner: dict, text: str, video_end: float) -> list[str]:
+    """Faixa fixa no topo (vídeo inteiro): retângulo, listras e o texto centralizado."""
+    end = _ass_time(video_end)
+    shape = "{\\an7\\pos(0,0)\\bord0\\shad0\\1c%s\\p1}%s{\\p0}"
+    events = [f"Dialogue: 1,0:00:00.00,{end},Hook,,0,0,0,,"
+              + shape % (banner["fill"], _rect(BANNER_TOP, BANNER_HEIGHT))]
+    top = BANNER_TOP + BANNER_HEIGHT
+    for color, height in zip(banner["stripes"], BANNER_STRIPES):
+        events.append(f"Dialogue: 1,0:00:00.00,{end},Hook,,0,0,0,," + shape % (color, _rect(top, height)))
+        top += height
+    center = (WIDTH // 2, BANNER_TOP + BANNER_HEIGHT // 2)
+    events.append(f"Dialogue: 2,0:00:00.00,{end},Hook,,0,0,0,,"
+                  f"{{\\an5\\pos({center[0]},{center[1]})\\fs{BANNER_FONT_SIZE}\\bord0\\shad0"
+                  f"\\fsp3\\1c{banner['text']}}}{_clean(text).upper()}")
+    return events
+
+
+def build_ass(words: list[TimedWord], video_end: float, font: str,
+              estilo: str | None = None, faixa: str | None = None) -> str:
+    style = style_for(estilo)
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {WIDTH}
@@ -419,12 +467,14 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Hook,{font},{SUB_FONT_SIZE},{WHITE},{WHITE},&H00000000&,&H90000000&,-1,0,0,0,100,100,1,0,1,9,4,5,40,40,0,1
+Style: Hook,{font},{SUB_FONT_SIZE},{WHITE},{WHITE},{style["outline"]},&H90000000&,-1,0,0,0,100,100,1,0,1,9,4,5,40,40,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events = []
+    if style["banner"] and (faixa or "").strip():
+        events += banner_events(style["banner"], faixa, video_end)
     chunks = chunk_words(words)
     for c_index, chunk in enumerate(chunks):
         texts = [_clean(w.text) for w in chunk]
@@ -436,7 +486,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             end = chunk[k + 1].start if k + 1 < len(chunk) else chunk_end
             if end <= start:
                 continue
-            color = RED if re.search(r"\d", word.text) else YELLOW
+            color = style["highlight"][c_index % len(style["highlight"])]
+            if style["number"] and re.search(r"\d", word.text):
+                color = style["number"]
             rendered_lines = []
             for line in lines:
                 parts = []
@@ -569,7 +621,8 @@ class VideoEditor:
         narration = self.build_narration(plans, work)
 
         words = [w for p in plans for w in p.words]
-        (work / "subtitles.ass").write_text(build_ass(words, total, self.font), encoding="utf-8")
+        (work / "subtitles.ass").write_text(
+            build_ass(words, total, self.font, episode.get("estilo"), episode.get("faixa")), encoding="utf-8")
 
         inputs = ["-i", video.name, "-i", narration.name]
         audio_labels = ["[1:a]"]

@@ -254,6 +254,26 @@ class EditorUnitTest(unittest.TestCase):
         self.assertIn("\\fscx112", lines[0])
         self.assertNotIn("\\fscx112", lines[1])
 
+    def test_ass_style_eua_alternates_red_and_blue_and_draws_banner(self):
+        words = self.words(["Trump", "perdeu.", "Em", "2026", "tudo", "muda."])
+        ass = build_ass(words, 8.0, "Arial Black", "eua", "Eleições EUA 2026")
+        dialogues = [l for l in ass.splitlines() if l.startswith("Dialogue")]
+        banner = [l for l in dialogues if l.startswith("Dialogue: 1,") or l.startswith("Dialogue: 2,")]
+        self.assertEqual(len(banner), 4)  # faixa, 2 listras, texto
+        self.assertIn("ELEIÇÕES EUA 2026", banner[-1])
+        self.assertTrue(all(",0:00:08.00," in l for l in banner))
+        subs = [l for l in dialogues if l.startswith("Dialogue: 0,")]
+        self.assertIn("{\\c&H002B16E0&}TRUMP", subs[0])      # 1º grupo: vermelho
+        self.assertIn("{\\c&H00F6823B&}EM", subs[2])         # 2º grupo: azul
+        self.assertIn("{\\c&H00F6823B&}2026", subs[3])       # número segue o grupo
+        self.assertIn(",&H00441F0A&,", ass)                    # contorno marinho
+
+    def test_ass_without_style_has_no_banner(self):
+        ass = build_ass(self.words(["O", "ano"]), 3.0, "Arial Black", None, "Eleições EUA 2026")
+        self.assertFalse(any(l.startswith("Dialogue: 1,") for l in ass.splitlines()))
+        ass = build_ass(self.words(["O", "ano"]), 3.0, "Arial Black", "nao-existe")
+        self.assertIn("{\\c&H0000D7FF&}O", ass)
+
     def test_ass_time_format(self):
         self.assertEqual(_ass_time(3725.456), "1:02:05.46")
 
