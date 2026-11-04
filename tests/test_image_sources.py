@@ -174,6 +174,21 @@ class WikimediaPageFallbackTest(unittest.TestCase):
         self.assertFalse(painting.attribution_required)
         self.assertEqual((crew.license, crew.attribution_required), ("No restrictions", False))
 
+    def test_after_a_429_the_next_searches_skip_the_api(self):
+        calls = []
+
+        def get_json(url, params, headers):
+            calls.append(params["gsrsearch"])
+            raise RateLimited()
+
+        source = WikimediaSource(get_json=get_json, get_html=lambda url, params: "")
+        source.search("first")
+        source.search("second")
+        self.assertEqual(calls, ["first"])  # a 2ª busca não espera a API de novo
+        source.api_limited_until = 0.0     # passado o intervalo, a API volta a ser tentada
+        source.search("third")
+        self.assertEqual(calls, ["first", "third"])
+
     def test_share_alike_page_only_when_allowed(self):
         self.assertNotIn("Village", [c.title for c in self.source().search("x")])
         self.assertIn("Village", [c.title for c in self.source(allow_share_alike=True).search("x")])

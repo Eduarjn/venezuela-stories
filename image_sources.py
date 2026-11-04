@@ -68,6 +68,9 @@ class Candidate:
 RETRY_STATUS = {429, 503}
 MAX_TRIES = 4
 MAX_WAIT_SECONDS = 30.0
+# A API do Commons limitada (429) costuma continuar assim por minutos: nesse intervalo as
+# buscas vão direto à página de busca, sem esperar a nova tentativa de cada cena.
+API_COOLDOWN_SECONDS = 600.0
 
 
 def _request(url: str, *, sleep: Callable[[float], None] | None = None, tries: int = MAX_TRIES, **kwargs):
@@ -212,11 +215,16 @@ class WikimediaSource:
         self.allow_share_alike = allow_share_alike
         self.get_json = get_json
         self.get_html = get_html
+        self.api_limited_until = 0.0  # depois de um 429 da API, vai direto à página de busca
 
     def search(self, query: str) -> list[Candidate]:
+        import time
+
         # No Commons, "-palavra" quer dizer "sem essa palavra": o título "USASC -22343" buscado
         # assim mesmo excluía o próprio arquivo. O hífen solto (" - ") não muda nada.
         query = re.sub(r"(^|\s)-(?=\w)", r"\1", query)
+        if time.monotonic() < self.api_limited_until:
+            return self.search_html(query)
         try:
             data = self.get_json(self.API, {
                 "action": "query", "format": "json", "formatversion": "2",
@@ -227,7 +235,9 @@ class WikimediaSource:
         except Exception as exc:  # noqa: BLE001 - API limitada: a página de busca responde
             if not _rate_limited(exc):
                 raise
-            log.info("API do Commons limitada (429); buscando '%s' pela página de busca", query)
+            log.info("API do Commons limitada (429); buscando '%s' pela página de busca "
+                     "(e as próximas %.0f min também)", query, API_COOLDOWN_SECONDS / 60)
+            self.api_limited_until = time.monotonic() + API_COOLDOWN_SECONDS
             return self.search_html(query)
         pages = sorted((data.get("query") or {}).get("pages") or [], key=lambda p: p.get("index", 0))
         results = []
